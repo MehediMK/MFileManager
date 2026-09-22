@@ -2,6 +2,8 @@
 
 A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**.
 
+> 📖 **Full documentation** (screenshots, guides, FAQ): [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md)
+
 ## Features
 
 - 📁 Browse directories with breadcrumbs, back/forward/up navigation

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Manager</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <script>
+        /* Tauri IPC mock for headless screenshot rendering */
+        const files = [
+            ['Reports', true,  0,       '2026-09-20 10:12:00', '2026-09-01 08:00:00', '755', 'dir', 'folder'],
+            ['Documents', true, 0,      '2026-09-18 16:45:00', '2026-08-12 09:00:00', '755', 'dir', 'folder'],
+            ['Downloads', true, 0,      '2026-09-22 09:30:00', '2026-06-01 10:00:00', '755', 'dir', 'folder'],
+            ['Pictures', true, 0,       '2026-09-21 19:20:00', '2026-05-04 12:00:00', '755', 'dir', 'folder'],
+            ['travel-photo.jpg', false, 2841233, '2026-09-14 14:03:00', '2026-09-14 14:03:00', '644', 'jpg', 'image/jpeg'],
+            ['invoice-2026.pdf', false, 482331, '2026-09-11 11:22:00', '2026-09-11 11:22:00', '644', 'pdf', 'application/pdf'],
+            ['project-notes.md', false, 8412, '2026-09-09 09:15:00', '2026-09-09 09:15:00', '644', 'md', 'text/markdown'],
+            ['backup.tar.gz', false, 102993244, '2026-09-05 03:00:00', '2026-09-05 03:00:00', '644', 'gz', 'application/gzip'],
+            ['main.rs', false, 5921, '2026-09-19 13:40:00', '2026-09-19 13:40:00', '644', 'rs', 'text/x-rust'],
+            ['file-manager.deb', false, 89011233, '2026-09-02 17:11:00', '2026-09-02 17:11:00', '644', 'deb', 'application/vnd.debian.binary-package'],
+        ];
+        const home = '/home/mir-info';
+        const toEntry = (name, isDir, size, modified, created, permissions, extension, mimeType) => ({
+            name, path: home + '/' + name, isDir, isSymlink: false, size,
+            modified, created, permissions, extension, mimeType, hidden: false,
+        });
+        const entries = files.map(f => toEntry(...f));
+        const handlers = {
+            home_dir: async () => home,
+            get_hidden_setting: async () => false,
+            disk_usage: async () => [{
+                device: '/dev/nvme0n1p2', mountPoint: '/',
+                total: 512110190592, free: 129485684736, used: 382624505856, usedPercent: 75,
+            }],
+            list_dir: async () => entries,
+            file_info: async ({ path }) => entries.find(e => e.path === path) || entries[5],
+            search_files: async () => [],
+            duplicates_search: async () => [],
+            batch_rename: async () => [],
+            recent_files: async () => [],
+        };
+        window.__TAURI__ = { core: { invoke: (cmd, args) => handlers[cmd](args || {}) } };
+    </script>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-section">
+                <h3>Places</h3>
+                <div id="recent-places"></div>
+            </div>
+            <div class="sidebar-section">
+                <h3>Devices</h3>
+                <div id="devices"></div>
+            </div>
+            <div class="sidebar-section">
+                <h3>Shortcuts</h3>
+                <ul>
+                    <li class="sidebar-item" data-folder="downloads"><span class="icon">📥</span> Downloads</li>
+                    <li class="sidebar-item" data-folder="documents"><span class="icon">📄</span> Documents</li>
+                    <li class="sidebar-item" data-folder="pictures"><span class="icon">🖼️</span> Pictures</li>
+                    <li class="sidebar-item" data-folder="music"><span class="icon">🎵</span> Music</li>
+                    <li class="sidebar-item" data-folder="videos"><span class="icon">🎬</span> Videos</li>
+                </ul>
+            </div>
+        </aside>
+
+        <main id="main">
+            <header id="toolbar">
+                <div class="nav-buttons">
+                    <button id="btn-back" title="Back">←</button>
+                    <button id="btn-forward" title="Forward">→</button>
+                    <button id="btn-up" title="Go Up">↑</button>
+                    <button id="btn-home" title="Home">🏠</button>
+                </div>
+                <div id="path-bar">
+                    <input type="text" id="path-input" placeholder="Path">
+                </div>
+                <div class="toolbar-actions">
+                    <button id="btn-terminal" title="Open Terminal Here">⌨️</button>
+                    <button id="btn-new-file" title="New File">📄</button>
+                    <button id="btn-new-folder" title="New Folder">🗂️</button>
+                    <button id="btn-rename" title="Rename">✏️</button>
+                    <button id="btn-disk" title="Disk Usage">💾</button>
+                    <button id="btn-dupes" title="Find Duplicates">🔁</button>
+                    <button id="btn-copy" title="Copy">📋</button>
+                    <button id="btn-paste" title="Paste">📌</button>
+                    <button id="btn-delete" title="Move to Trash">🗑️</button>
+                    <button id="btn-properties" title="Properties">ℹ️</button>
+                </div>
+                <div class="view-options">
+                    <input type="checkbox" id="hide-hidden-check" title="Toggle hidden files">
+                    <label for="hide-hidden-check">Hidden</label>
+                </div>
+            </header>
+
+            <div id="files-view">
+                <div id="file-list-header">
+                    <span class="col-name">Name</span>
+                    <span class="col-size">Size</span>
+                    <span class="col-modified">Modified</span>
+                    <span class="col-perms">Permissions</span>
+                </div>
+                <div id="file-list"></div>
+            </div>
+
+            <footer id="statusbar">
+                <span id="status-count">0 items</span>
+                <span id="status-selection"></span>
+                <span id="status-canpaste"></span>
+            </footer>
+        </main>
+
+        <!-- Context Menu -->
+        <div id="context-menu" class="context-menu hidden">
+            <div class="menu-item" data-action="open">Open</div>
+            <div class="menu-item" data-action="rename">Rename</div>
+            <div class="menu-item" data-action="copy">Copy</div>
+            <div class="menu-item" data-action="cut">Cut</div>
+            <div class="menu-item" data-action="paste">Paste</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item danger" data-action="delete">Move to Trash</div>
+            <div class="menu-item danger" data-action="delete-permanent">Delete Permanently</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" data-action="new-file">New File</div>
+            <div class="menu-item" data-action="new-folder">New Folder</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" data-action="properties">Properties</div>
+        </div>
+
+        <!-- Toast -->
+        <div id="toast" class="toast hidden"></div>
+
+        <!-- Modal -->
+        <div id="modal-overlay" class="modal-overlay hidden">
+            <div class="modal">
+                <div id="modal-content"></div>
+                <div class="modal-actions">
+                    <button id="modal-cancel" class="btn-secondary">Cancel</button>
+                    <button id="modal-confirm" class="btn-primary">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+    <script>
+        /* Optional post-render action driven by query param: ?shot=properties */
+        const shot = new URLSearchParams(location.search).get('shot');
+        if (shot === 'properties') {
+            setTimeout(() => {
+                const entry = {
+                    name: 'invoice-2026.pdf', path: home + '/invoice-2026.pdf', isDir: false,
+                    isSymlink: false, size: 482331, modified: '2026-09-11 11:22:00',
+                    created: '2026-09-11 11:22:00', permissions: '644', extension: 'pdf',
+                    mimeType: 'application/pdf', hidden: false,
+                };
+                showModal('Properties', renderProps(entry));
+            }, 400);
+        } else if (shot === 'disk') {
+            setTimeout(showDiskUsage, 400);
+        } else if (shot === 'menu') {
+            setTimeout(() => {
+                const m = document.getElementById('context-menu');
+                m.style.left = '780px';
+                m.style.top = '150px';
+                m.classList.remove('hidden');
+                document.getElementById('status-selection').textContent = '1 selected';
+            }, 400);
+        }
+    </script>
+</body>
+</html>
