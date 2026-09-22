@@ -498,11 +498,49 @@ pub async fn cli_open(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_terminal(path: String) -> Result<(), String> {
-    let mut cmd = std::process::Command::new("xdg-terminal-exec");
-    if !path.is_empty() {
-        cmd.arg(&path);
+    use std::process::{Command, Stdio};
+
+    const CANDIDATES: [&str; 10] = [
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+        "alacritty",
+        "kitty",
+        "terminator",
+        "tilix",
+        "xterm",
+        "xdg-terminal-exec",
+    ];
+
+    fn present(name: &str) -> bool {
+        ["/bin", "/usr/bin", "/usr/local/bin", "/snap/bin"]
+            .iter()
+            .any(|d| Path::new(d).join(name).exists())
     }
-    cmd.spawn()
-        .map_err(|e| format!("failed to open terminal: {}", e))?;
+
+    let term = CANDIDATES
+        .iter()
+        .find(|t| present(t))
+        .ok_or_else(|| "no terminal emulator found".to_string())?;
+
+    let dir = if path.is_empty() || path == "~" {
+        dirs_home().unwrap_or_else(|_| "/".to_string())
+    } else {
+        path
+    };
+    let quoted = format!("'{}'", dir.replace('\'', "'\\''"));
+    let script = format!("cd {} && exec {}", quoted, term);
+
+    Command::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to open terminal ({}): {}", term, e))?;
+
+    log::info!("opened terminal {} in {}", term, dir);
     Ok(())
 }
