@@ -1,10 +1,9 @@
-<!--
-  File Manager — Documentation
-  SEO metadata (used when rendering this page to HTML):
-  <title>File Manager for Ubuntu Linux — Fast Open-Source Tauri App</title>
-  <meta name="description" content="File Manager is a fast, open-source file management tool for Ubuntu and other Linux distributions. Built with Rust and Tauri 2, it features search, duplicate detection, batch rename, disk usage analytics, trash integration and a dark modern UI. Download the .deb or AppImage or build from source.">
-  <meta name="keywords" content="linux file manager, ubuntu file manager, open source, tauri app, rust file manager, duplicate finder, batch rename, disk usage, gtk, deb, appimage, file explorer">
--->
+---
+title: File Manager for Ubuntu Linux — Fast Open-Source Tauri App
+description: Fast, open-source file manager for Ubuntu and other Linux distributions. Built with Rust and Tauri 2, it features search, duplicate detection, batch rename, disk usage analytics, trash integration and a dark modern UI. Download the .deb or AppImage or build from source.
+permalink: /
+---
+<!-- SEO keywords: linux file manager, ubuntu file manager, open source, tauri app, rust file manager, duplicate finder, batch rename, disk usage, gtk, deb, appimage, file explorer -->
 # File Manager — Documentation
 
 > **File Manager** is a fast, modern, open-source file management system for **Ubuntu / Linux**, built with **Rust** and **Tauri 2**. Lightweight, keyboard-friendly, and privacy-respecting — your files never leave your machine.
@@ -157,7 +156,7 @@ sudo apt install ./target/release/bundle/deb/file-manager_0.1.0_amd64.deb
 ## FAQ
 
 **Is File Manager free?**
-Yes — it is open source under the [MIT license](../LICENSE).
+Yes — it is open source under the MIT license (see `LICENSE` in the repository root).
 
 **Which Linux distributions are supported?**
 Ubuntu/Debian (.deb), Fedora/RHEL (.rpm), and any distribution that supports AppImage. The runtime requires `webkit2gtk-4.1`, GTK 3, and `librsvg2` (listed in `setup-deps.sh`).
@@ -169,7 +168,7 @@ No. All operations run locally on your machine. The only file the app writes is 
 Yes. The 🔁 toolbar button scans the current folder, groups files by size, then verifies duplicates by SHA-256 content hash.
 
 **What is the technology stack?**
-Rust 2024, Tauri 2, and a vanilla HTML/CSS/JS frontend. See [`Cargo.toml`](../Cargo.toml) for the full dependency list.
+Rust 2024, Tauri 2, and a vanilla HTML/CSS/JS frontend. See `Cargo.toml` (repository root) for the full dependency list.
 
 **How do I install the Tauri CLI?**
 ```bash
@@ -231,4 +230,4 @@ cargo tauri build --bundles deb,appimage,rpm      # production build
 
 ## License
 
-[File Manager](../LICENSE) is released under the **MIT License**. You are free to use, modify, and distribute it, including for commercial purposes. PRs welcome!
+**File Manager** is released under the **MIT License**. You are free to use, modify, and distribute it, including for commercial purposes. PRs welcome!
