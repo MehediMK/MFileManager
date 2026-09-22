@@ -1,16 +1,106 @@
 const { invoke } = window.__TAURI__.core;
 
-const state = {
-    currentPath: '',
-    history: [],
-    historyIndex: -1,
-    selectedItems: new Set(),
+// Shared (app-wide) settings live on `shared`; per-tab navigation state
+// (currentPath/history/selection/search) lives on the active tab object.
+const shared = {
     clipboard: null, // { items: [], action: 'copy' | 'cut' }
     hiddenShown: false,
-    contextTarget: null, // path under cursor
-    isSearching: false,
-    searchResults: [],
 };
+
+const perTab = new Map();
+let activeTabId = null;
+
+const state = new Proxy(shared, {
+    get(t, prop) {
+        if (prop in t) return t[prop];
+        const tab = perTab.get(activeTabId);
+        return tab ? tab[prop] : undefined;
+    },
+    set(t, prop, value) {
+        if (prop in t) {
+            t[prop] = value;
+            return true;
+        }
+        const tab = perTab.get(activeTabId);
+        if (tab) tab[prop] = value;
+        return true;
+    },
+});
+
+function makeTab(path) {
+    return {
+        currentPath: path,
+        history: [path],
+        historyIndex: 0,
+        selectedItems: new Set(),
+        contextTarget: null, // path under cursor
+        isSearching: false,
+        searchResults: [],
+    };
+}
+
+// ----- Tabs -----
+
+function renderTabs() {
+    const cont = document.getElementById('tabs');
+    cont.innerHTML = '';
+    perTab.forEach((tab, id) => {
+        const el = document.createElement('div');
+        el.className = 'tab' + (id === activeTabId ? ' active' : '');
+        el.addEventListener('click', () => switchTab(id));
+        const label = document.createElement('span');
+        label.className = 'tab-label';
+        label.textContent = tab.currentPath.split('/').filter(Boolean).pop() || tab.currentPath || '/';
+        label.title = tab.currentPath;
+        const close = document.createElement('button');
+        close.className = 'tab-close';
+        close.textContent = '×';
+        close.title = 'Close tab';
+        close.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeTab(id);
+        });
+        el.append(label, close);
+        cont.appendChild(el);
+    });
+}
+
+function newTab(path, activate = true) {
+    if (!path) path = state.currentPath || '/';
+    const id = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    perTab.set(id, makeTab(path));
+    if (activate) {
+        activeTabId = id;
+        renderTabs();
+        navigate(path);
+    } else {
+        renderTabs();
+    }
+    return id;
+}
+
+function switchTab(id) {
+    if (!perTab.has(id) || id === activeTabId) return;
+    activeTabId = id;
+    renderTabs();
+    navigate(state.currentPath);
+}
+
+function closeTab(id) {
+    if (perTab.size <= 1) return;
+    const ids = [...perTab.keys()];
+    const idx = ids.indexOf(id);
+    const wasActive = id === activeTabId;
+    perTab.delete(id);
+    if (wasActive) {
+        const next = ids[idx + 1] ?? ids[idx - 1];
+        activeTabId = next;
+    }
+    renderTabs();
+    if (wasActive) navigate(perTab.get(activeTabId).currentPath);
+}
+
+document.getElementById('btn-new-tab').addEventListener('click', () => newTab());
 
 // ----- Helper functions -----
 
@@ -88,6 +178,8 @@ async function navigate(path) {
     try {
         const entries = await send('list_dir', { path });
         state.currentPath = path;
+        state.isSearching = false;
+        state.searchResults = [];
         if (state.historyIndex === -1 || state.history[state.historyIndex] !== path) {
             state.history = state.history.slice(0, state.historyIndex + 1);
             state.history.push(path);
@@ -201,8 +293,7 @@ function createFileRow(entry) {
         if (!row.classList.contains('selected')) {
             selectOnly(row);
         }
-        showContextMenu(e.clientX, e.clientY, entry.path, entry.isDir);
-        state.contextTarget = { path: entry.path, isDir: entry.isDir };
+        showContextMenu(e.clientX, e.clientY, { path: entry.path, isDir: entry.isDir });
     });
 
     return row;
@@ -279,16 +370,25 @@ async function doCopy() {
 
 // ----- Context menu -----
 
-function showContextMenu(x, y, path, isDir) {
+function showContextMenu(x, y, target) {
     const menu = document.getElementById('context-menu');
-    menu.style.left = x + 'px';
-    menu.style.top = y + 'px';
-    menu.classList.remove('hidden');
-    state.contextTarget = { path, isDir };
+    state.contextTarget = target || null;
 
-    // Update paste item state
-    const pasteItem = menu.querySelector('[data-action="paste"]');
-    pasteItem.style.display = state.clipboard ? 'block' : 'none';
+    const needsItem = ['open', 'rename', 'copy', 'cut', 'delete', 'delete-permanent', 'properties'];
+    menu.querySelectorAll('.menu-item').forEach(item => {
+        const a = item.dataset.action;
+        let display = 'block';
+        if (needsItem.includes(a) && (!state.contextTarget || !state.contextTarget.path)) {
+            display = 'none';
+        } else if (a === 'paste') {
+            display = state.clipboard ? 'block' : 'none';
+        }
+        item.style.display = display;
+    });
+
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - 260)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - 360)) + 'px';
+    menu.classList.remove('hidden');
 }
 
 document.getElementById('context-menu').addEventListener('click', (e) => {
@@ -307,6 +407,14 @@ document.addEventListener('click', (e) => {
     if (!e.target.closest('#context-menu')) {
         hideContextMenu();
     }
+});
+
+// Suppress the WebKit default context menu (e.g. "Inspect Element") everywhere
+// and show our own menu on empty space.
+document.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('#context-menu') || e.target.closest('.file-row')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, null);
 });
 
 // ----- Action handling -----
@@ -343,7 +451,7 @@ async function handleAction(action) {
             break;
         case 'delete':
             if (target.path) {
-                if (confirm(`Move "${target.path.split('/').pop()}" to trash?`)) {
+                if (await safeConfirm(`Move "${target.path.split('/').pop()}" to trash?`)) {
                     try {
                         await send('delete_path', { path: target.path, permanent: false });
                         navigate(state.currentPath);
@@ -355,7 +463,7 @@ async function handleAction(action) {
             break;
         case 'delete-permanent':
             if (target.path) {
-                if (confirm(`Permanently delete "${target.path.split('/').pop()}"? This cannot be undone!`)) {
+                if (await safeConfirm(`Permanently delete "${target.path.split('/').pop()}"? This cannot be undone!`)) {
                     try {
                         await send('delete_path', { path: target.path, permanent: true });
                         navigate(state.currentPath);
@@ -370,6 +478,18 @@ async function handleAction(action) {
             break;
         case 'new-folder':
             showCreateModal('dir');
+            break;
+        case 'search':
+            startSearch();
+            break;
+        case 'terminal':
+            openTerminal();
+            break;
+        case 'set-background':
+            setBackground();
+            break;
+        case 'reset-background':
+            resetBackground();
             break;
         case 'properties':
             if (target.path) {
@@ -400,6 +520,19 @@ function showModal(title, content) {
 
 function closeModal() {
     document.getElementById('modal-overlay').classList.add('hidden');
+}
+
+// Non-native confirm dialog (native confirm() crashes some WebKitGTK builds)
+function safeConfirm(message) {
+    return new Promise(resolve => {
+        const overlay = document.getElementById('modal-overlay');
+        document.getElementById('modal-content').innerHTML = `<h3>Confirm</h3><p>${message}</p>`;
+        const ok = document.getElementById('modal-confirm');
+        const cancel = document.getElementById('modal-cancel');
+        ok.onclick = () => { overlay.classList.add('hidden'); resolve(true); };
+        cancel.onclick = () => { overlay.classList.add('hidden'); resolve(false); };
+        overlay.classList.remove('hidden');
+    });
 }
 
 function showRenameModal(path) {
@@ -451,9 +584,13 @@ function showCreateModal(type) {
 
 // ----- Search -----
 
-async function startSearch() {
-    const query = prompt('Search for files by name:');
-    if (!query) return;
+async function startSearch(initialQuery) {
+    const box = document.getElementById('search-input');
+    const query = (initialQuery !== undefined ? initialQuery : box.value).trim();
+    if (!query) {
+        box.focus();
+        return;
+    }
 
     const target = state.contextTarget && state.contextTarget.isDir
         ? state.contextTarget.path
@@ -491,8 +628,7 @@ async function startSearch() {
             row.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 selectOnly(row);
-                showContextMenu(e.clientX, e.clientY, r.path, r.isDir);
-                state.contextTarget = { path: r.path, isDir: r.isDir };
+                showContextMenu(e.clientX, e.clientY, { path: r.path, isDir: r.isDir });
             });
             list.appendChild(row);
         }
@@ -628,6 +764,20 @@ async function loadDevices() {
     }
 }
 
+// Wire up the static Shortcuts section in the sidebar
+document.querySelectorAll('.sidebar-section ul .sidebar-item[data-folder]').forEach(item => {
+    item.addEventListener('click', async () => {
+        const home = await send('home_dir');
+        const f = item.dataset.folder;
+        navigate(home + '/' + f.charAt(0).toUpperCase() + f.slice(1));
+    });
+});
+
+// Sidebar collapse toggle
+document.getElementById('btn-sidebar').addEventListener('click', () => {
+    document.body.classList.toggle('sidebar-collapsed');
+});
+
 // ----- Toolbar wiring -----
 
 document.getElementById('btn-back').addEventListener('click', () => {
@@ -715,7 +865,7 @@ document.getElementById('btn-paste').addEventListener('click', () => doCopy());
 document.getElementById('btn-delete').addEventListener('click', async () => {
     if (!state.selectedItems.size) return;
     const confirmMsg = `Move ${state.selectedItems.size} item(s) to trash?`;
-    if (confirm(confirmMsg)) {
+    if (await safeConfirm(confirmMsg)) {
         try {
             for (const item of state.selectedItems) {
                 await send('delete_path', { path: item, permanent: false });
@@ -745,21 +895,69 @@ document.getElementById('hide-hidden-check').addEventListener('change', (e) => {
     if (state.currentPath) navigate(state.currentPath);
 });
 
-document.getElementById('btn-terminal').addEventListener('click', async () => {
+async function openTerminal() {
     try {
-        await send('cli_open', { path: `xdg-terminal-exec ${state.currentPath || '~'}` });
+        await send('open_terminal', { path: state.currentPath || '~' });
     } catch {
-        try {
-            await send('cli_open', { path: 'konsole' });
-        } catch {
-            showToast('No terminal found', true);
-        }
+        showToast('No terminal found', true);
     }
-});
+}
+
+document.getElementById('btn-terminal').addEventListener('click', openTerminal);
+
+// ----- Background image -----
+
+function applyBackground(dataUrl) {
+    const list = document.getElementById('file-list');
+    if (dataUrl) {
+        list.classList.add('has-bg');
+        list.style.backgroundImage = `url("${dataUrl}")`;
+    } else {
+        list.classList.remove('has-bg');
+        list.style.backgroundImage = '';
+    }
+}
+
+async function setBackground() {
+    let path;
+    try {
+        path = await send('pick_image');
+    } catch (e) {
+        showToast(String(e), true);
+        return;
+    }
+    if (!path) return;
+    try {
+        const dataUrl = await send('load_image_data', { path });
+        await send('background_setting', { path });
+        applyBackground(dataUrl);
+        showToast('Background image set');
+    } catch (e) {
+        showToast(String(e), true);
+    }
+}
+
+async function resetBackground() {
+    try {
+        await send('background_setting', { path: null });
+        applyBackground(null);
+        showToast('Background image removed');
+    } catch (e) {
+        showToast(String(e), true);
+    }
+}
+
+document.getElementById('btn-background').addEventListener('click', setBackground);
 
 document.getElementById('path-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         navigate(e.target.value.trim());
+    }
+});
+
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        startSearch();
     }
 });
 
@@ -812,9 +1010,19 @@ document.addEventListener('keydown', (e) => {
             break;
         case 't':
         case 'T':
-            if (e.ctrlKey) {
+            if (e.ctrlKey && e.altKey) {
                 e.preventDefault();
                 document.getElementById('btn-terminal').click();
+            } else if (e.ctrlKey) {
+                e.preventDefault();
+                newTab();
+            }
+            break;
+        case 'w':
+        case 'W':
+            if (e.ctrlKey && !e.altKey) {
+                e.preventDefault();
+                closeTab(activeTabId);
             }
             break;
         case 'n':
@@ -828,7 +1036,9 @@ document.addEventListener('keydown', (e) => {
         case 'F':
             if (e.ctrlKey) {
                 e.preventDefault();
-                startSearch();
+                const box = document.getElementById('search-input');
+                box.focus();
+                box.select();
             }
             break;
     }
@@ -843,13 +1053,24 @@ document.addEventListener('keydown', (e) => {
         document.getElementById('hide-hidden-check').checked = hiddenSetting;
         state.hiddenShown = hiddenSetting;
 
+        // Load background image
+        const bgPath = await send('get_background_setting');
+        if (bgPath) {
+            try {
+                const dataUrl = await send('load_image_data', { path: bgPath });
+                applyBackground(dataUrl);
+            } catch (e) {
+                console.warn('Failed to load background:', e);
+            }
+        }
+
         // Load sidebar
         await loadSidebar();
         await loadDevices();
 
         // Navigate to home
         const home = await send('home_dir');
-        await navigate(home);
+        newTab(home);
     } catch (e) {
         console.error('Init failed:', e);
         showToast('Failed to initialize: ' + e, true);

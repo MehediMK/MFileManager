@@ -279,6 +279,14 @@ html, body {
         padding: 6px 8px;
         font-size: 15px;
     }
+    /* Hide secondary buttons on narrow windows (still available via context menu / shortcuts) */
+    #btn-dupes,
+    #btn-disk,
+    #btn-properties,
+    #btn-terminal,
+    #btn-background {
+        display: none;
+    }
     #search-input {
         width: 140px;
     }

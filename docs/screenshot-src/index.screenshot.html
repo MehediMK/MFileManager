@@ -40,6 +40,7 @@
             duplicates_search: async () => [],
             batch_rename: async () => [],
             recent_files: async () => [],
+            get_background_setting: async () => null,
         };
         window.__TAURI__ = { core: { invoke: (cmd, args) => handlers[cmd](args || {}) } };
     </script>
@@ -66,8 +67,13 @@
         </aside>
 
         <main id="main">
+            <div id="tab-bar">
+                <div id="tabs"></div>
+                <button id="btn-new-tab" title="New Tab">+</button>
+            </div>
             <header id="toolbar">
                 <div class="nav-buttons">
+                    <button id="btn-sidebar" title="Toggle Sidebar">☰</button>
                     <button id="btn-back" title="Back">←</button>
                     <button id="btn-forward" title="Forward">→</button>
                     <button id="btn-up" title="Go Up">↑</button>
@@ -87,8 +93,10 @@
                     <button id="btn-paste" title="Paste">📌</button>
                     <button id="btn-delete" title="Move to Trash">🗑️</button>
                     <button id="btn-properties" title="Properties">ℹ️</button>
+                    <button id="btn-background" title="Set Background Image">🖼️</button>
                 </div>
                 <div class="view-options">
+                    <input type="text" id="search-input" placeholder="Search files…" title="Search (Ctrl+F)">
                     <input type="checkbox" id="hide-hidden-check" title="Toggle hidden files">
                     <label for="hide-hidden-check">Hidden</label>
                 </div>
@@ -124,6 +132,12 @@
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="new-file">New File</div>
             <div class="menu-item" data-action="new-folder">New Folder</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" data-action="search">🔍 Search</div>
+            <div class="menu-item" data-action="terminal">⌨️ Open Terminal</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" data-action="set-background">🖼️ Set Background</div>
+            <div class="menu-item" data-action="reset-background">🧹 Reset Background</div>
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="properties">Properties</div>
         </div>
