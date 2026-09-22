@@ -4,6 +4,10 @@ A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**
 
 > 📖 **Full documentation** (screenshots, guides, FAQ): [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md)
 
+> 🛠️ **Developer / architecture guide** (how it works, file connections, feature recipes): [`PROJECT.md`](PROJECT.md)
+
+> 💾 **Portable release** (no installers needed): build with [`package-tar.sh`](#portable-tar.gz-release) → `dist/MFileManager-<version>-linux-amd64.tar.gz`
+
 ## Features
 
 - 📑 **Tabs** — multiple folders in one window (`Ctrl+T` new, `Ctrl+W` close); each tab keeps its own history, selection & search state
@@ -72,6 +76,24 @@ cargo tauri dev
 cargo tauri build --bundles deb,appimage,rpm
 ```
 
+## Portable tar.gz release
+
+```bash
+./package-tar.sh
+```
+
+Builds the optimized binary (`cargo build --release`) and packs
+`dist/MFileManager-<version>-linux-amd64.tar.gz` with the executable, a GNOME
+`.desktop` launcher, icon, README, and license. No installers or runtime dirs required:
+
+```bash
+tar -xzf dist/MFileManager-0.1.0-linux-amd64.tar.gz
+cd MFileManager-0.1.0-linux-amd64 && ./file-manager
+```
+
+To install into the GNOME app launcher, copy `file-manager.desktop` to
+`~/.local/share/applications/` and fix its `Exec=` line to the real path.
+
 ## Project Structure
 
 ```
@@ -80,6 +102,9 @@ file-manager/
 ├── build.rs               # tauri-build
 ├── tauri.conf.json        # Tauri window/bundle config
 ├── setup-deps.sh          # Install system deps
+├── package-tar.sh         # Build portable .tar.gz release (→ dist/)
+├── PROJECT.md             # Architecture & maintenance guide
+├── icon-source.png        # 1024px icon source (cargo tauri icon)
 ├── icons/                 # Generated app icons
 ├── src/
 │   ├── main.rs            # Entry point
@@ -90,6 +115,7 @@ file-manager/
 │       ├── index.html     # UI layout
 │       ├── styles.css     # Dark theme styling
 │       └── script.js      # UI logic + invoke() calls
+├── dist/                  # tar.gz release output (gitignored)
 ├── LICENSE                # MIT
 └── README.md
 ```

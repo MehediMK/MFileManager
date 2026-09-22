@@ -11,6 +11,9 @@
 *.rpm
 *.tar.gz
 
+# Release packaging output (see package-tar.sh)
+/dist/
+
 # Editor / OS
 .vscode/
 .idea/
