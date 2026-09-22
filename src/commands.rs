@@ -1,4 +1,4 @@
-use crate::models::{DiskInfo, DuplicateGroup, FileEntry, RecentFile, SearchResult};
+use crate::models::{DiskInfo, DuplicateGroup, FileEntry, PreviewInfo, RecentFile, SearchResult};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Local};
 use mime_guess::from_path;
@@ -623,5 +623,162 @@ pub fn open_terminal(path: String) -> Result<(), String> {
         .map_err(|e| format!("failed to open terminal ({}): {}", term, e))?;
 
     log::info!("opened terminal {} in {}", term, dir);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn preview_file(path: String) -> Result<PreviewInfo, String> {
+    use base64::Engine;
+
+    let p = PathBuf::from(&path);
+    let meta = fs::metadata(&p).map_err(|e| format!("cannot preview: {}", e))?;
+    let name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.clone());
+    let mime_type = from_path(&p).first_or_octet_stream().to_string();
+    let size = meta.len();
+
+    if meta.is_dir() {
+        return Ok(PreviewInfo {
+            name,
+            kind: "dir".into(),
+            size,
+            mime_type,
+            text: None,
+            data_url: None,
+        });
+    }
+
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    const TEXT_EXTS: [&str; 24] = [
+        "txt", "md", "rs", "c", "h", "cpp", "py", "js", "ts", "tsx", "jsx", "json", "toml", "yaml",
+        "yml", "sh", "html", "css", "xml", "log", "csv", "ini", "conf", "svg",
+    ];
+
+    let kind = if mime_type.starts_with("image/") {
+        "image"
+    } else if mime_type.starts_with("text/") || TEXT_EXTS.contains(&ext.as_str()) {
+        "text"
+    } else if mime_type == "application/pdf" {
+        "pdf"
+    } else if mime_type.starts_with("audio/") {
+        "audio"
+    } else if mime_type.starts_with("video/") {
+        "video"
+    } else {
+        "binary"
+    };
+
+    let mut text = None;
+    let mut data_url = None;
+    match kind {
+        "text" => {
+            if size < 2_000_000 {
+                let bytes = fs::read(&p).unwrap_or_default();
+                let mut s = String::from_utf8_lossy(&bytes).into_owned();
+                if s.chars().count() > 5000 {
+                    s = s.chars().take(5000).collect::<String>() + "\n… [preview truncated]";
+                }
+                text = Some(s);
+            }
+        }
+        "image" | "audio" | "video" => {
+            let max = if kind == "image" {
+                8_000_000u64
+            } else {
+                12_000_000u64
+            };
+            if size <= max {
+                let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+                data_url = Some(format!(
+                    "data:{};base64,{}",
+                    mime_type,
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(PreviewInfo {
+        name,
+        kind: kind.to_string(),
+        size,
+        mime_type,
+        text,
+        data_url,
+    })
+}
+
+#[tauri::command]
+pub fn compress_zip(items: Vec<String>, dest_dir: String, name: String) -> Result<(), String> {
+    use std::io::{BufWriter, Seek, Write};
+    use zip::CompressionMethod;
+    use zip::write::SimpleFileOptions;
+
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("archive name cannot be empty".to_string());
+    }
+    let dest = PathBuf::from(&dest_dir).join(if trimmed.to_lowercase().ends_with(".zip") {
+        trimmed
+    } else {
+        format!("{}.zip", trimmed)
+    });
+
+    let file = fs::File::create(&dest).map_err(|e| format!("failed to create archive: {}", e))?;
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let mut zip = zip::ZipWriter::new(BufWriter::new(file));
+
+    fn add_path<W: Write + Seek>(
+        zip: &mut zip::ZipWriter<W>,
+        path: &Path,
+        prefix: &str,
+        options: &SimpleFileOptions,
+    ) -> std::io::Result<()> {
+        let leaf = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let zip_name = if prefix.is_empty() {
+            leaf
+        } else {
+            format!("{}/{}", prefix, leaf)
+        };
+
+        if path.is_dir() {
+            zip.add_directory(format!("{}/", zip_name), *options)?;
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                add_path(zip, &entry.path(), &zip_name, options)?;
+            }
+        } else if path.is_symlink() {
+            let link = fs::read_link(path)?;
+            zip.start_file(zip_name, *options)?;
+            zip.write_all(link.to_string_lossy().as_bytes())?;
+        } else {
+            zip.start_file(zip_name, *options)?;
+            let mut f = fs::File::open(path)?;
+            std::io::copy(&mut f, zip)?;
+        }
+        Ok(())
+    }
+
+    for item in &items {
+        let p = PathBuf::from(item);
+        if p.exists() {
+            add_path(&mut zip, &p, "", &options)
+                .map_err(|e| format!("failed to add {}: {}", p.display(), e))?;
+        }
+    }
+
+    zip.finish()
+        .map_err(|e| format!("failed to write archive: {}", e))?;
+    log::info!("created archive {}", dest.display());
     Ok(())
 }

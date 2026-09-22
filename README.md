@@ -12,6 +12,10 @@ A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**
 - 📋 Copy / Cut / Paste with auto-rename on conflict (`name (copy 1).txt`)
 - 🗑️ Move to Trash (XDG trash) or delete permanently — in-app confirm dialog (no native popups)
 - ✏️ Rename, create files & folders
+- 👁️ **Preview pane** — image/audio/video/text inline preview + Open button
+- 🧱 **Compress to ZIP** — multi-select → archive (deflate)
+- 🖱️ **Drag & drop** move/copy onto folders, the `..` row, or sidebar (Ctrl = copy)
+- 🕒 **Recent Files** — recent items listed in a dialog (navigate to parent)
 - 🖼️ **Custom background image** (set via `🖼️` or context menu, persisted between launches)
 - 💻 **Open Terminal here** in the current folder (detects gnome-terminal, konsole, xfce4-terminal, xterm, …)
 - 📊 Disk usage panel (per mount point)
@@ -108,6 +112,8 @@ file-manager/
 | `background_setting` / `get_background_setting` | Persist background image |
 | `pick_image` / `load_image_data` | Choose & load background (async dialog, base64 data URL) |
 | `open_terminal` | Open terminal in a folder (auto-detect emulator) |
+| `preview_file` | Text/image/audio/video preview payload |
+| `compress_zip` | Create ZIP archive from selected paths |
 | `home_dir` / `cli_open` | Helpers |
 
 ## Shortcuts

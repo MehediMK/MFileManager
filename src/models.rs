@@ -83,3 +83,14 @@ pub struct RecentFile {
     pub name: String,
     pub last_opened: String,
 }
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewInfo {
+    pub name: String,
+    pub kind: String,
+    pub size: u64,
+    pub mime_type: String,
+    pub text: Option<String>,
+    pub data_url: Option<String>,
+}

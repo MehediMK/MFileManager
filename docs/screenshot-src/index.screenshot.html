@@ -94,6 +94,7 @@
                     <button id="btn-delete" title="Move to Trash">🗑️</button>
                     <button id="btn-properties" title="Properties">ℹ️</button>
                     <button id="btn-background" title="Set Background Image">🖼️</button>
+                    <button id="btn-preview" title="Preview Pane">👁</button>
                 </div>
                 <div class="view-options">
                     <input type="text" id="search-input" placeholder="Search files…" title="Search (Ctrl+F)">
@@ -102,14 +103,19 @@
                 </div>
             </header>
 
-            <div id="files-view">
-                <div id="file-list-header">
-                    <span class="col-name">Name</span>
-                    <span class="col-size">Size</span>
-                    <span class="col-modified">Modified</span>
-                    <span class="col-perms">Permissions</span>
+            <div id="work-area">
+                <div id="files-view">
+                    <div id="file-list-header">
+                        <span class="col-name">Name</span>
+                        <span class="col-size">Size</span>
+                        <span class="col-modified">Modified</span>
+                        <span class="col-perms">Permissions</span>
+                    </div>
+                    <div id="file-list"></div>
                 </div>
-                <div id="file-list"></div>
+                <aside id="preview-pane" class="hidden">
+                    <div class="preview-empty">Select one item to preview</div>
+                </aside>
             </div>
 
             <footer id="statusbar">
@@ -122,6 +128,7 @@
         <!-- Context Menu -->
         <div id="context-menu" class="context-menu hidden">
             <div class="menu-item" data-action="open">Open</div>
+            <div class="menu-item" data-action="preview">👁 Preview</div>
             <div class="menu-item" data-action="rename">Rename</div>
             <div class="menu-item" data-action="copy">Copy</div>
             <div class="menu-item" data-action="cut">Cut</div>
@@ -129,6 +136,7 @@
             <div class="menu-divider"></div>
             <div class="menu-item danger" data-action="delete">Move to Trash</div>
             <div class="menu-item danger" data-action="delete-permanent">Delete Permanently</div>
+            <div class="menu-item" data-action="compress">🧱 Compress to ZIP</div>
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="new-file">New File</div>
             <div class="menu-item" data-action="new-folder">New Folder</div>

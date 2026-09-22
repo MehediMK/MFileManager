@@ -191,6 +191,7 @@ async function navigate(path) {
         updateNavButtons();
         updateStatusBar();
         updateSidebar();
+        updatePreview();
     } catch (e) {
         showToast(typeof e === 'string' ? e : String(e), true);
     }
@@ -236,9 +237,11 @@ function renderList(entries) {
 
     // Go up row
     if (state.currentPath && state.currentPath !== '/') {
+        const parent = state.currentPath.split('/').slice(0, -1).join('/') || '/';
         const upRow = document.createElement('div');
         upRow.className = 'file-row';
         upRow.dataset.up = 'true';
+        upRow.dataset.path = parent;
         upRow.innerHTML = `
             <div class="file-name"><span class="icon">⬆️</span><span data-name>..</span></div>
             <span class="file-size"></span>
@@ -246,7 +249,6 @@ function renderList(entries) {
             <span class="file-perms"></span>
         `;
         upRow.addEventListener('click', () => {
-            const parent = state.currentPath.split('/').slice(0, -1).join('/') || '/';
             navigate(parent);
         });
         list.appendChild(upRow);
@@ -265,6 +267,7 @@ function createFileRow(entry) {
     row.className = 'file-row' + (entry.isDir ? ' dir-row' : '');
     row.dataset.path = entry.path;
     row.dataset.isDir = entry.isDir;
+    row.draggable = true;
     row.innerHTML = `
         <div class="file-name"><span class="icon">${getIcon(entry)}</span><span data-name title="${escapeHTML(entry.name)}">${escapeHTML(entry.name)}</span></div>
         <span class="file-size">${entry.isDir ? '' : formatSize(entry.size)}</span>
@@ -304,6 +307,7 @@ function selectOnly(row) {
     row.classList.add('selected');
     state.selectedItems = new Set([row.dataset.path]);
     updateStatusBar();
+    updatePreview();
 }
 
 function toggleSelect(row) {
@@ -314,26 +318,79 @@ function toggleSelect(row) {
         state.selectedItems.delete(row.dataset.path);
     }
     updateStatusBar();
+    updatePreview();
 }
 
 function addDragBehavior() {
     const rows = document.querySelectorAll('.file-row[data-path]');
-    let dragStartX, dragStartY;
-
     rows.forEach(row => {
-        row.addEventListener('mousedown', (e) => {
-            dragStartX = e.clientX;
-            dragStartY = e.clientY;
+        row.addEventListener('dragstart', (e) => {
+            let paths;
+            if (state.selectedItems.size) paths = [...state.selectedItems];
+            else if (row.dataset.path) paths = [row.dataset.path];
+            if (!paths.length) {
+                e.preventDefault();
+                return;
+            }
+            state.draggingPaths = paths;
+            e.dataTransfer.setData('application/json', JSON.stringify(paths));
+            e.dataTransfer.effectAllowed = 'copyMove';
+            row.classList.add('dragging');
         });
 
-        row.addEventListener('mouseup', (e) => {
-            const dx = e.clientX - dragStartX;
-            const dy = e.clientY - dragStartY;
-            if (dx > 50 || dy > 10) { // Drag detected
-                e.preventDefault();
-            }
+        row.addEventListener('dragend', () => {
+            row.classList.remove('dragging');
+            document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
         });
+
+        // Folders and the ".." row are drop targets
+        if (row.classList.contains('dir-row') || row.dataset.up) {
+            row.addEventListener('dragover', (e) => {
+                if (state.draggingPaths) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = e.ctrlKey || e.shiftKey ? 'copy' : 'move';
+                    row.classList.add('drop-target');
+                }
+            });
+            row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+            row.addEventListener('drop', (e) => {
+                e.preventDefault();
+                row.classList.remove('drop-target');
+                moveDropped(e, row.dataset.path);
+            });
+        }
     });
+}
+
+async function moveDropped(e, targetDir) {
+    let paths = [];
+    try {
+        const raw = e.dataTransfer.getData('application/json');
+        if (raw) paths = JSON.parse(raw);
+    } catch {
+        paths = [];
+    }
+    if (!paths.length && state.draggingPaths) paths = state.draggingPaths;
+    state.draggingPaths = null;
+    document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+
+    if (!paths.length || !targetDir) return;
+    const copy = e.ctrlKey || e.shiftKey;
+    let done = 0;
+    for (const p of paths) {
+        if (p === targetDir) continue;
+        try {
+            if (copy) await send('copy_item', { src: p, dstDir: targetDir });
+            else await send('move_item', { src: p, dstDir: targetDir });
+            done++;
+        } catch (err) {
+            showToast(String(err), true);
+        }
+    }
+    if (done) {
+        showToast(`${done} item(s) ${copy ? 'copied' : 'moved'}`);
+        navigate(state.currentPath);
+    }
 }
 
 // ----- Asset actions -----
@@ -374,7 +431,7 @@ function showContextMenu(x, y, target) {
     const menu = document.getElementById('context-menu');
     state.contextTarget = target || null;
 
-    const needsItem = ['open', 'rename', 'copy', 'cut', 'delete', 'delete-permanent', 'properties'];
+    const needsItem = ['open', 'preview', 'rename', 'copy', 'cut', 'delete', 'delete-permanent', 'compress', 'properties'];
     menu.querySelectorAll('.menu-item').forEach(item => {
         const a = item.dataset.action;
         let display = 'block';
@@ -481,6 +538,12 @@ async function handleAction(action) {
             break;
         case 'search':
             startSearch();
+            break;
+        case 'preview':
+            togglePreview(true);
+            break;
+        case 'compress':
+            compressZIP();
             break;
         case 'terminal':
             openTerminal();
@@ -712,15 +775,23 @@ async function loadSidebar() {
     const places = document.getElementById('recent-places');
 
     places.innerHTML = '';
+    const recentItem = document.createElement('div');
+    recentItem.className = 'sidebar-item';
+    recentItem.innerHTML = `<span class="icon">🕒</span> Recent Files`;
+    recentItem.addEventListener('click', showRecentFiles);
+    places.appendChild(recentItem);
+
     const homeItem = document.createElement('div');
     homeItem.className = 'sidebar-item';
     homeItem.innerHTML = `<span class="icon">🏠</span> Home`;
+    homeItem.dataset.dropPath = home;
     homeItem.addEventListener('click', () => navigate(home));
     places.appendChild(homeItem);
 
     const desktop = document.createElement('div');
     desktop.className = 'sidebar-item';
     desktop.innerHTML = `<span class="icon">🖥️</span> Desktop`;
+    desktop.dataset.dropPath = home + '/Desktop';
     desktop.addEventListener('click', () => navigate(home + '/Desktop'));
     places.appendChild(desktop);
 
@@ -728,6 +799,7 @@ async function loadSidebar() {
         const item = document.createElement('div');
         item.className = 'sidebar-item sidebar-shortcut';
         item.dataset.folder = folder.toLowerCase();
+        item.dataset.dropPath = home + '/' + folder;
         item.innerHTML = `<span class="icon">${getFolderIcon(folder)}</span> ${folder}`;
         item.addEventListener('click', () => navigate(home + '/' + folder));
         places.appendChild(item);
@@ -756,6 +828,7 @@ async function loadDevices() {
             const mount = disk.mountPoint;
             const label = mount === '/' ? 'Root /' : mount;
             item.innerHTML = `💾 <span title="${disk.device}">${escapeHTML(label)}</span> <span style="font-size: 11px; color: var(--text-dim); margin-left: auto">${disk.usedPercent}%</span>`;
+            item.dataset.dropPath = mount;
             item.addEventListener('click', () => navigate(mount));
             devices.appendChild(item);
         }
@@ -948,6 +1021,163 @@ async function resetBackground() {
 }
 
 document.getElementById('btn-background').addEventListener('click', setBackground);
+
+// ----- Preview pane -----
+
+function previewVisible() {
+    return !document.getElementById('preview-pane').classList.contains('hidden');
+}
+
+function togglePreview(force) {
+    const pane = document.getElementById('preview-pane');
+    const show = force === true ? true : force === false ? false : previewVisible();
+    pane.classList.toggle('hidden', !show);
+    document.getElementById('btn-preview').classList.toggle('previewing', show);
+    if (show) updatePreview();
+}
+
+async function updatePreview() {
+    if (!previewVisible()) return;
+    const pane = document.getElementById('preview-pane');
+    if (state.selectedItems.size !== 1) {
+        pane.innerHTML = '<div class="preview-empty">Select one item to preview</div>';
+        return;
+    }
+    const path = [...state.selectedItems][0];
+    pane.innerHTML = '<div class="preview-empty">Loading…</div>';
+    try {
+        const info = await send('preview_file', { path });
+        renderPreview(info, path);
+    } catch (e) {
+        pane.innerHTML = `<div class="preview-empty">${escapeHTML(String(e))}</div>`;
+    }
+}
+
+function renderPreview(info, path) {
+    const pane = document.getElementById('preview-pane');
+    let body = '';
+    if (info.kind === 'image' && info.dataUrl) {
+        body = `<img class="preview-media" src="${info.dataUrl}" alt="${escapeHTML(info.name)}">`;
+    } else if (info.kind === 'audio' && info.dataUrl) {
+        body = `<audio class="preview-media" controls src="${info.dataUrl}"></audio>`;
+    } else if (info.kind === 'video' && info.dataUrl) {
+        body = `<video class="preview-media" controls src="${info.dataUrl}"></video>`;
+    } else if (info.kind === 'text' && info.text != null) {
+        body = `<pre class="preview-text">${escapeHTML(info.text)}</pre>`;
+    } else if (info.kind === 'dir') {
+        body = '<div class="preview-empty">📁 Directory — no preview</div>';
+    } else {
+        body = '<div class="preview-empty">Preview not supported for this type</div>';
+    }
+    pane.innerHTML = `
+        <div class="preview-head">
+            <h3>${escapeHTML(info.name)}</h3>
+            <div class="preview-meta">${escapeHTML(info.mimeType)} · ${formatSize(info.size)}</div>
+        </div>
+        ${body}
+        <button class="preview-open" data-path="${escapeHTML(path)}">Open in app</button>
+    `;
+}
+
+document.getElementById('preview-pane').addEventListener('click', (e) => {
+    const btn = e.target.closest('.preview-open');
+    if (btn) send('cli_open', { path: btn.dataset.path }).catch(err => showToast(err, true));
+});
+
+document.getElementById('btn-preview').addEventListener('click', () => togglePreview());
+
+// ----- Compress to ZIP -----
+
+async function compressZIP() {
+    let items = [];
+    if (state.selectedItems.size) {
+        items = [...state.selectedItems];
+    } else if (state.contextTarget && state.contextTarget.path) {
+        items = [state.contextTarget.path];
+    }
+    if (!items.length) {
+        showToast('Select items first', true);
+        return;
+    }
+    const base = items.length === 1
+        ? (items[0].split('/').pop() || 'archive').replace(/\.\w+$/, '')
+        : 'archive';
+    showModal('Compress to ZIP', `
+        <div class="field">
+            <label>Archive name</label>
+            <input type="text" id="zip-name" value="${escapeHTML(base)}" autofocus>
+        </div>
+    `);
+    document.getElementById('zip-name').select();
+    document.getElementById('modal-confirm').onclick = async () => {
+        const name = document.getElementById('zip-name').value.trim();
+        if (!name) return;
+        try {
+            await send('compress_zip', { items, destDir: state.currentPath, name });
+            closeModal();
+            showToast(`Created ${name}.zip`);
+            navigate(state.currentPath);
+        } catch (e) {
+            showToast(String(e), true);
+        }
+    };
+    document.getElementById('modal-cancel').onclick = closeModal;
+}
+
+// ----- Recent files -----
+
+async function showRecentFiles() {
+    let recs;
+    try {
+        recs = await send('recent_files');
+    } catch (e) {
+        showToast(String(e), true);
+        return;
+    }
+    if (!recs.length) {
+        showToast('No recent files yet', true);
+        return;
+    }
+    const rows = recs.map(r => `
+        <div class="recent-item" data-path="${escapeHTML(r.path)}">
+            <span>📄</span>
+            <span class="recent-name" title="${escapeHTML(r.path)}">${escapeHTML(r.name)}</span>
+            <span class="recent-time">${escapeHTML(r.lastOpened || '')}</span>
+        </div>`).join('');
+    showModal('Recent Files', `<div class="recent-list">${rows}</div>`);
+    document.getElementById('modal-confirm').onclick = closeModal;
+    document.getElementById('modal-cancel').onclick = closeModal;
+    document.querySelectorAll('.recent-item').forEach(el => {
+        el.addEventListener('click', () => {
+            const p = el.dataset.path;
+            closeModal();
+            navigate(p.split('/').slice(0, -1).join('/') || '/');
+        });
+    });
+}
+
+// ----- Sidebar as drop target -----
+
+const sidebarDrop = document.getElementById('sidebar');
+sidebarDrop.addEventListener('dragover', (e) => {
+    const item = e.target.closest('.sidebar-item');
+    if (item && item.dataset.dropPath) {
+        e.preventDefault();
+        item.classList.add('drop-target');
+        e.dataTransfer.dropEffect = e.ctrlKey || e.shiftKey ? 'copy' : 'move';
+    }
+});
+sidebarDrop.addEventListener('dragleave', (e) => {
+    const item = e.target.closest('.sidebar-item');
+    if (item) item.classList.remove('drop-target');
+});
+sidebarDrop.addEventListener('drop', (e) => {
+    const item = e.target.closest('.sidebar-item');
+    if (!item || !item.dataset.dropPath) return;
+    e.preventDefault();
+    item.classList.remove('drop-target');
+    moveDropped(e, item.dataset.dropPath);
+});
 
 document.getElementById('path-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
