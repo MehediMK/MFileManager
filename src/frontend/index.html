@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Manager</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-section">
+                <h3>Places</h3>
+                <div id="recent-places"></div>
+            </div>
+            <div class="sidebar-section">
+                <h3>Devices</h3>
+                <div id="devices"></div>
+            </div>
+            <div class="sidebar-section">
+                <h3>Shortcuts</h3>
+                <ul>
+                    <li class="sidebar-item" data-folder="downloads"><span class="icon">📥</span> Downloads</li>
+                    <li class="sidebar-item" data-folder="documents"><span class="icon">📄</span> Documents</li>
+                    <li class="sidebar-item" data-folder="pictures"><span class="icon">🖼️</span> Pictures</li>
+                    <li class="sidebar-item" data-folder="music"><span class="icon">🎵</span> Music</li>
+                    <li class="sidebar-item" data-folder="videos"><span class="icon">🎬</span> Videos</li>
+                </ul>
+            </div>
+        </aside>
+
+        <main id="main">
+            <header id="toolbar">
+                <div class="nav-buttons">
+                    <button id="btn-back" title="Back">←</button>
+                    <button id="btn-forward" title="Forward">→</button>
+                    <button id="btn-up" title="Go Up">↑</button>
+                    <button id="btn-home" title="Home">🏠</button>
+                </div>
+                <div id="path-bar">
+                    <input type="text" id="path-input" placeholder="Path">
+                </div>
+                <div class="toolbar-actions">
+                    <button id="btn-terminal" title="Open Terminal Here">⌨️</button>
+                    <button id="btn-new-file" title="New File">📄</button>
+                    <button id="btn-new-folder" title="New Folder">🗂️</button>
+                    <button id="btn-rename" title="Rename">✏️</button>
+                    <button id="btn-disk" title="Disk Usage">💾</button>
+                    <button id="btn-dupes" title="Find Duplicates">🔁</button>
+                    <button id="btn-copy" title="Copy">📋</button>
+                    <button id="btn-paste" title="Paste">📌</button>
+                    <button id="btn-delete" title="Move to Trash">🗑️</button>
+                    <button id="btn-properties" title="Properties">ℹ️</button>
+                </div>
+                <div class="view-options">
+                    <input type="checkbox" id="hide-hidden-check" title="Toggle hidden files">
+                    <label for="hide-hidden-check">Hidden</label>
+                </div>
+            </header>
+
+            <div id="files-view">
+                <div id="file-list-header">
+                    <span class="col-name">Name</span>
+                    <span class="col-size">Size</span>
+                    <span class="col-modified">Modified</span>
+                    <span class="col-perms">Permissions</span>
+                </div>
+                <div id="file-list"></div>
+            </div>
+
+            <footer id="statusbar">
+                <span id="status-count">0 items</span>
+                <span id="status-selection"></span>
+                <span id="status-canpaste"></span>
+            </footer>
+        </main>
+
+        <!-- Context Menu -->
+        <div id="context-menu" class="context-menu hidden">
+            <div class="menu-item" data-action="open">Open</div>
+            <div class="menu-item" data-action="rename">Rename</div>
+            <div class="menu-item" data-action="copy">Copy</div>
+            <div class="menu-item" data-action="cut">Cut</div>
+            <div class="menu-item" data-action="paste">Paste</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item danger" data-action="delete">Move to Trash</div>
+            <div class="menu-item danger" data-action="delete-permanent">Delete Permanently</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" data-action="new-file">New File</div>
+            <div class="menu-item" data-action="new-folder">New Folder</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" data-action="properties">Properties</div>
+        </div>
+
+        <!-- Toast -->
+        <div id="toast" class="toast hidden"></div>
+
+        <!-- Modal -->
+        <div id="modal-overlay" class="modal-overlay hidden">
+            <div class="modal">
+                <div id="modal-content"></div>
+                <div class="modal-actions">
+                    <button id="modal-cancel" class="btn-secondary">Cancel</button>
+                    <button id="modal-confirm" class="btn-primary">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
