@@ -495,3 +495,14 @@ pub async fn cli_open(path: String) -> Result<(), String> {
         .map_err(|e| format!("failed to open {}: {}", path, e))?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn open_terminal(path: String) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("xdg-terminal-exec");
+    if !path.is_empty() {
+        cmd.arg(&path);
+    }
+    cmd.spawn()
+        .map_err(|e| format!("failed to open terminal: {}", e))?;
+    Ok(())
+}

@@ -29,6 +29,7 @@ pub fn run() {
             commands::hidden_files_setting,
             commands::get_hidden_setting,
             commands::cli_open,
+            commands::open_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

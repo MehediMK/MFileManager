@@ -201,8 +201,7 @@ function createFileRow(entry) {
         if (!row.classList.contains('selected')) {
             selectOnly(row);
         }
-        showContextMenu(e.clientX, e.clientY, entry.path, entry.isDir);
-        state.contextTarget = { path: entry.path, isDir: entry.isDir };
+        showContextMenu(e.clientX, e.clientY, { path: entry.path, isDir: entry.isDir });
     });
 
     return row;
@@ -279,16 +278,25 @@ async function doCopy() {
 
 // ----- Context menu -----
 
-function showContextMenu(x, y, path, isDir) {
+function showContextMenu(x, y, target) {
     const menu = document.getElementById('context-menu');
-    menu.style.left = x + 'px';
-    menu.style.top = y + 'px';
-    menu.classList.remove('hidden');
-    state.contextTarget = { path, isDir };
+    state.contextTarget = target || null;
 
-    // Update paste item state
-    const pasteItem = menu.querySelector('[data-action="paste"]');
-    pasteItem.style.display = state.clipboard ? 'block' : 'none';
+    const needsItem = ['open', 'rename', 'copy', 'cut', 'delete', 'delete-permanent', 'properties'];
+    menu.querySelectorAll('.menu-item').forEach(item => {
+        const a = item.dataset.action;
+        let display = 'block';
+        if (needsItem.includes(a) && (!state.contextTarget || !state.contextTarget.path)) {
+            display = 'none';
+        } else if (a === 'paste') {
+            display = state.clipboard ? 'block' : 'none';
+        }
+        item.style.display = display;
+    });
+
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - 260)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - 360)) + 'px';
+    menu.classList.remove('hidden');
 }
 
 document.getElementById('context-menu').addEventListener('click', (e) => {
@@ -307,6 +315,14 @@ document.addEventListener('click', (e) => {
     if (!e.target.closest('#context-menu')) {
         hideContextMenu();
     }
+});
+
+// Suppress the WebKit default context menu (e.g. "Inspect Element") everywhere
+// and show our own menu on empty space.
+document.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('#context-menu') || e.target.closest('.file-row')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, null);
 });
 
 // ----- Action handling -----
@@ -370,6 +386,12 @@ async function handleAction(action) {
             break;
         case 'new-folder':
             showCreateModal('dir');
+            break;
+        case 'search':
+            startSearch();
+            break;
+        case 'terminal':
+            openTerminal();
             break;
         case 'properties':
             if (target.path) {
@@ -451,9 +473,13 @@ function showCreateModal(type) {
 
 // ----- Search -----
 
-async function startSearch() {
-    const query = prompt('Search for files by name:');
-    if (!query) return;
+async function startSearch(initialQuery) {
+    const box = document.getElementById('search-input');
+    const query = (initialQuery !== undefined ? initialQuery : box.value).trim();
+    if (!query) {
+        box.focus();
+        return;
+    }
 
     const target = state.contextTarget && state.contextTarget.isDir
         ? state.contextTarget.path
@@ -491,8 +517,7 @@ async function startSearch() {
             row.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 selectOnly(row);
-                showContextMenu(e.clientX, e.clientY, r.path, r.isDir);
-                state.contextTarget = { path: r.path, isDir: r.isDir };
+                showContextMenu(e.clientX, e.clientY, { path: r.path, isDir: r.isDir });
             });
             list.appendChild(row);
         }
@@ -745,21 +770,25 @@ document.getElementById('hide-hidden-check').addEventListener('change', (e) => {
     if (state.currentPath) navigate(state.currentPath);
 });
 
-document.getElementById('btn-terminal').addEventListener('click', async () => {
+async function openTerminal() {
     try {
-        await send('cli_open', { path: `xdg-terminal-exec ${state.currentPath || '~'}` });
+        await send('open_terminal', { path: state.currentPath || '~' });
     } catch {
-        try {
-            await send('cli_open', { path: 'konsole' });
-        } catch {
-            showToast('No terminal found', true);
-        }
+        showToast('No terminal found', true);
     }
-});
+}
+
+document.getElementById('btn-terminal').addEventListener('click', openTerminal);
 
 document.getElementById('path-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         navigate(e.target.value.trim());
+    }
+});
+
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        startSearch();
     }
 });
 
@@ -828,7 +857,9 @@ document.addEventListener('keydown', (e) => {
         case 'F':
             if (e.ctrlKey) {
                 e.preventDefault();
-                startSearch();
+                const box = document.getElementById('search-input');
+                box.focus();
+                box.select();
             }
             break;
     }
