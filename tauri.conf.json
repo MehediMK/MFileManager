@@ -15,8 +15,8 @@
         "title": "File Manager",
         "width": 1200,
         "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 940,
+        "minHeight": 560,
         "center": true,
         "resizable": true,
         "fullscreen": false

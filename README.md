@@ -6,19 +6,21 @@ A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**
 
 ## Features
 
+- 📑 **Tabs** — multiple folders in one window (`Ctrl+T` new, `Ctrl+W` close); each tab keeps its own history, selection & search state
+- 🔍 **Search box** in the toolbar (magnifier icon, focus glow) + recursive name search
 - 📁 Browse directories with breadcrumbs, back/forward/up navigation
-- 🔍 Search files by name (case-insensitive, configurable depth)
 - 📋 Copy / Cut / Paste with auto-rename on conflict (`name (copy 1).txt`)
-- 🗑️ Move to Trash (XDG trash) or delete permanently
+- 🗑️ Move to Trash (XDG trash) or delete permanently — in-app confirm dialog (no native popups)
 - ✏️ Rename, create files & folders
+- 🖼️ **Custom background image** (set via `🖼️` or context menu, persisted between launches)
+- 💻 **Open Terminal here** in the current folder (detects gnome-terminal, konsole, xfce4-terminal, xterm, …)
 - 📊 Disk usage panel (per mount point)
 - 🔁 Find duplicate files by content hash (SHA-256)
 - 📝 Batch rename with pattern + counter
 - 👁️ Toggle hidden files (persisted setting)
-- 🖱️ Context menu (open, rename, copy, cut, paste, delete, properties)
-- ⌨️ Keyboard shortcuts: `Ctrl+C/V`, `Ctrl+N`, `Ctrl+T`, `F2`, `Delete`, `Backspace`, `Ctrl+H`, `Ctrl+F`, `Ctrl+R`
+- 🖱️ Context menu (open, rename, copy, cut, paste, delete, properties) — WebKit "Inspect Element" suppressed
 - 🏠 Sidebar with Home, Desktop, and XDG user dirs
-- 📱 Dark theme, custom icons per file type
+- 📱 Dark theme, custom icons per file type, custom app icon
 - ⚡ Single binary, minimal memory footprint
 
 ## Stack
@@ -103,6 +105,9 @@ file-manager/
 | `batch_rename` | Pattern-based bulk rename |
 | `disk_usage` | Disk info via sysinfo |
 | `hidden_files_setting` / `get_hidden_setting` | Persist UI prefs |
+| `background_setting` / `get_background_setting` | Persist background image |
+| `pick_image` / `load_image_data` | Choose & load background (async dialog, base64 data URL) |
+| `open_terminal` | Open terminal in a folder (auto-detect emulator) |
 | `home_dir` / `cli_open` | Helpers |
 
 ## Shortcuts
@@ -115,10 +120,12 @@ file-manager/
 | `Delete` | Move to trash |
 | `Backspace` | Go up |
 | `Ctrl+H` | Toggle hidden files |
-| `Ctrl+F` | Search |
+| `Ctrl+F` | Focus search box |
 | `Ctrl+R` | Refresh |
 | `Ctrl+N` | New file |
-| `Ctrl+T` | Open terminal here |
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close tab |
+| `Ctrl+Alt+T` | Open terminal here |
 | `Ctrl+Click` | Multi-select |
 
 ## Troubleshooting

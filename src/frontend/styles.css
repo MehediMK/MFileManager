@@ -169,8 +169,9 @@ html, body {
 
 #toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 8px 10px;
     padding: 8px 12px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
@@ -179,6 +180,14 @@ html, body {
 .nav-buttons {
     display: flex;
     gap: 4px;
+    flex-shrink: 0;
+}
+
+.toolbar-actions {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
 }
 
 .nav-buttons button, .toolbar-actions button {
@@ -203,10 +212,12 @@ html, body {
 
 #path-bar {
     flex: 1;
+    min-width: 140px;
 }
 
 #path-input {
     width: 100%;
+    min-width: 0;
     padding: 7px 12px;
     background: var(--bg);
     border: 1px solid var(--border);
@@ -256,6 +267,62 @@ html, body {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(137, 180, 250, 0.25);
     width: 250px;
+}
+
+/* Compact the layout on smaller windows so no control gets clipped */
+@media (max-width: 1150px) {
+    #toolbar {
+        gap: 6px 8px;
+        padding: 6px 10px;
+    }
+    .nav-buttons button, .toolbar-actions button {
+        padding: 6px 8px;
+        font-size: 15px;
+    }
+    #search-input {
+        width: 150px;
+    }
+    #search-input:focus {
+        width: 190px;
+    }
+    #sidebar {
+        width: 170px;
+        min-width: 150px;
+        padding: 10px 6px;
+    }
+}
+
+@media (max-width: 930px) {
+    #sidebar {
+        width: 46px;
+        min-width: 46px;
+        padding: 10px 4px;
+    }
+    .sidebar-section h3 {
+        display: none;
+    }
+    .sidebar-item span {
+        display: none;
+    }
+    .sidebar-item {
+        justify-content: center;
+        padding: 8px 0;
+    }
+    #search-input {
+        width: 120px;
+    }
+    #search-input:focus {
+        width: 160px;
+    }
+    #file-list-header, .file-row {
+        grid-template-columns: 2.5fr 1fr 1.4fr;
+    }
+    .col-perms {
+        display: none;
+    }
+    .file-perms {
+        display: none;
+    }
 }
 
 /* File List */
