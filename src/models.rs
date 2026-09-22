@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,7 @@ pub struct FileEntry {
     pub hidden: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl FileEntry {
     pub fn new(
         name: String,
@@ -75,7 +76,7 @@ pub struct DiskInfo {
     pub used_percent: u8,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentFile {
     pub path: String,

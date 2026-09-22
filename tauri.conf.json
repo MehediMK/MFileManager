@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.filemanager.app",
   "build": {
-    "frontendDist": "../src/frontend",
+    "frontendDist": "src/frontend",
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
   },

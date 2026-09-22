@@ -2,29 +2,30 @@
 /target/
 **/*.rs.bk
 
-# Tauri
-/src-tauri/target/
+# Tauri generated schemas (regenerated at build time)
+/gen/
 
-# Frontend
-node_modules/
-dist/
-.vite/
-
-# IDE / OS
-.vscode/
-.idea/
-*.swp
-.DS_Store
-
-# Build artifacts
+# Tauri build outputs (bundled inside target/)
 *.deb
 *.AppImage
 *.rpm
 *.tar.gz
 
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
 # Logs
 *.log
 
-# Environment
+# Environment / secrets
 .env
 .env.local
+.env.*
+
+# Local cache written by the app to the repo dir (if ever enabled)
+.recent.json
+.settings.json

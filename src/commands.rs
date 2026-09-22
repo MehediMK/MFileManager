@@ -176,7 +176,7 @@ pub fn copy_item(src: String, dst_dir: String) -> Result<(), String> {
     let source = PathBuf::from(&src);
     let name = source
         .file_name()
-        .ok_or_else(|| format!("cannot determine filename"))?;
+        .ok_or_else(|| "cannot determine filename".to_string())?;
     let dest = PathBuf::from(&dst_dir).join(name);
 
     // Handle name conflicts
@@ -231,11 +231,14 @@ pub fn move_item(src: String, dst_dir: String) -> Result<(), String> {
     let source = PathBuf::from(&src);
     let name = source
         .file_name()
-        .ok_or_else(|| format!("cannot determine filename"))?;
+        .ok_or_else(|| "cannot determine filename".to_string())?;
     let dest = PathBuf::from(&dst_dir).join(name);
 
     if dest.exists() {
-        return Err(format!("{} already exists at destination", name));
+        return Err(format!(
+            "{} already exists at destination",
+            name.to_string_lossy()
+        ));
     }
 
     fs::rename(&source, &dest).map_err(|e| format!("failed to move: {}", e))
@@ -307,13 +310,13 @@ pub fn duplicates_search(base_dir: String) -> Result<Vec<DuplicateGroup>, String
         .into_iter()
         .flatten()
     {
-        if entry.file_type().is_file() {
-            if let Ok(meta) = entry.metadata() {
-                size_map
-                    .entry(meta.len())
-                    .or_default()
-                    .push(entry.path().to_path_buf());
-            }
+        if entry.file_type().is_file()
+            && let Ok(meta) = entry.metadata()
+        {
+            size_map
+                .entry(meta.len())
+                .or_default()
+                .push(entry.path().to_path_buf());
         }
     }
 
@@ -344,7 +347,7 @@ pub fn duplicates_search(base_dir: String) -> Result<Vec<DuplicateGroup>, String
         }
     }
 
-    groups.sort_by(|a, b| b.size.cmp(&a.size));
+    groups.sort_by_key(|g| std::cmp::Reverse(g.size));
     Ok(groups)
 }
 
@@ -360,7 +363,11 @@ fn hash_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect())
 }
 
 #[tauri::command]
