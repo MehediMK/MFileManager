@@ -280,39 +280,28 @@ html, body {
         font-size: 15px;
     }
     #search-input {
-        width: 150px;
+        width: 140px;
     }
     #search-input:focus {
-        width: 190px;
+        width: 180px;
     }
+    /* Sidebar collapses to icon-only on narrow windows */
     #sidebar {
-        width: 170px;
-        min-width: 150px;
-        padding: 10px 6px;
-    }
-}
-
-@media (max-width: 930px) {
-    #sidebar {
-        width: 46px;
-        min-width: 46px;
+        width: 56px;
+        min-width: 56px;
         padding: 10px 4px;
     }
     .sidebar-section h3 {
         display: none;
     }
-    .sidebar-item span {
-        display: none;
-    }
     .sidebar-item {
+        font-size: 0;
         justify-content: center;
-        padding: 8px 0;
+        padding: 9px 0;
     }
-    #search-input {
-        width: 120px;
-    }
-    #search-input:focus {
-        width: 160px;
+    .sidebar-item .icon {
+        font-size: 16px;
+        width: auto;
     }
     #file-list-header, .file-row {
         grid-template-columns: 2.5fr 1fr 1.4fr;
@@ -323,6 +312,18 @@ html, body {
     .file-perms {
         display: none;
     }
+}
+
+/* Manual collapse via the ☰ toolbar button */
+#sidebar {
+    transition: width 0.15s ease, min-width 0.15s ease;
+}
+body.sidebar-collapsed #sidebar {
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    overflow: hidden;
 }
 
 /* File List */

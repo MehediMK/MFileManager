@@ -764,6 +764,20 @@ async function loadDevices() {
     }
 }
 
+// Wire up the static Shortcuts section in the sidebar
+document.querySelectorAll('.sidebar-section ul .sidebar-item[data-folder]').forEach(item => {
+    item.addEventListener('click', async () => {
+        const home = await send('home_dir');
+        const f = item.dataset.folder;
+        navigate(home + '/' + f.charAt(0).toUpperCase() + f.slice(1));
+    });
+});
+
+// Sidebar collapse toggle
+document.getElementById('btn-sidebar').addEventListener('click', () => {
+    document.body.classList.toggle('sidebar-collapsed');
+});
+
 // ----- Toolbar wiring -----
 
 document.getElementById('btn-back').addEventListener('click', () => {
