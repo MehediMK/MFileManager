@@ -359,7 +359,7 @@ async function handleAction(action) {
             break;
         case 'delete':
             if (target.path) {
-                if (confirm(`Move "${target.path.split('/').pop()}" to trash?`)) {
+                if (await safeConfirm(`Move "${target.path.split('/').pop()}" to trash?`)) {
                     try {
                         await send('delete_path', { path: target.path, permanent: false });
                         navigate(state.currentPath);
@@ -371,7 +371,7 @@ async function handleAction(action) {
             break;
         case 'delete-permanent':
             if (target.path) {
-                if (confirm(`Permanently delete "${target.path.split('/').pop()}"? This cannot be undone!`)) {
+                if (await safeConfirm(`Permanently delete "${target.path.split('/').pop()}"? This cannot be undone!`)) {
                     try {
                         await send('delete_path', { path: target.path, permanent: true });
                         navigate(state.currentPath);
@@ -392,6 +392,12 @@ async function handleAction(action) {
             break;
         case 'terminal':
             openTerminal();
+            break;
+        case 'set-background':
+            setBackground();
+            break;
+        case 'reset-background':
+            resetBackground();
             break;
         case 'properties':
             if (target.path) {
@@ -422,6 +428,19 @@ function showModal(title, content) {
 
 function closeModal() {
     document.getElementById('modal-overlay').classList.add('hidden');
+}
+
+// Non-native confirm dialog (native confirm() crashes some WebKitGTK builds)
+function safeConfirm(message) {
+    return new Promise(resolve => {
+        const overlay = document.getElementById('modal-overlay');
+        document.getElementById('modal-content').innerHTML = `<h3>Confirm</h3><p>${message}</p>`;
+        const ok = document.getElementById('modal-confirm');
+        const cancel = document.getElementById('modal-cancel');
+        ok.onclick = () => { overlay.classList.add('hidden'); resolve(true); };
+        cancel.onclick = () => { overlay.classList.add('hidden'); resolve(false); };
+        overlay.classList.remove('hidden');
+    });
 }
 
 function showRenameModal(path) {
@@ -740,7 +759,7 @@ document.getElementById('btn-paste').addEventListener('click', () => doCopy());
 document.getElementById('btn-delete').addEventListener('click', async () => {
     if (!state.selectedItems.size) return;
     const confirmMsg = `Move ${state.selectedItems.size} item(s) to trash?`;
-    if (confirm(confirmMsg)) {
+    if (await safeConfirm(confirmMsg)) {
         try {
             for (const item of state.selectedItems) {
                 await send('delete_path', { path: item, permanent: false });
@@ -779,6 +798,50 @@ async function openTerminal() {
 }
 
 document.getElementById('btn-terminal').addEventListener('click', openTerminal);
+
+// ----- Background image -----
+
+function applyBackground(dataUrl) {
+    const list = document.getElementById('file-list');
+    if (dataUrl) {
+        list.classList.add('has-bg');
+        list.style.backgroundImage = `url("${dataUrl}")`;
+    } else {
+        list.classList.remove('has-bg');
+        list.style.backgroundImage = '';
+    }
+}
+
+async function setBackground() {
+    let path;
+    try {
+        path = await send('pick_image');
+    } catch (e) {
+        showToast(String(e), true);
+        return;
+    }
+    if (!path) return;
+    try {
+        const dataUrl = await send('load_image_data', { path });
+        await send('background_setting', { path });
+        applyBackground(dataUrl);
+        showToast('Background image set');
+    } catch (e) {
+        showToast(String(e), true);
+    }
+}
+
+async function resetBackground() {
+    try {
+        await send('background_setting', { path: null });
+        applyBackground(null);
+        showToast('Background image removed');
+    } catch (e) {
+        showToast(String(e), true);
+    }
+}
+
+document.getElementById('btn-background').addEventListener('click', setBackground);
 
 document.getElementById('path-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -873,6 +936,17 @@ document.addEventListener('keydown', (e) => {
         const hiddenSetting = await send('get_hidden_setting');
         document.getElementById('hide-hidden-check').checked = hiddenSetting;
         state.hiddenShown = hiddenSetting;
+
+        // Load background image
+        const bgPath = await send('get_background_setting');
+        if (bgPath) {
+            try {
+                const dataUrl = await send('load_image_data', { path: bgPath });
+                applyBackground(dataUrl);
+            } catch (e) {
+                console.warn('Failed to load background:', e);
+            }
+        }
 
         // Load sidebar
         await loadSidebar();

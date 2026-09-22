@@ -28,6 +28,10 @@ pub fn run() {
             commands::recent_files,
             commands::hidden_files_setting,
             commands::get_hidden_setting,
+            commands::background_setting,
+            commands::get_background_setting,
+            commands::pick_image,
+            commands::load_image_data,
             commands::cli_open,
             commands::open_terminal,
         ])

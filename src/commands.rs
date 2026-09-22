@@ -460,31 +460,112 @@ pub fn recent_files() -> Result<Vec<RecentFile>, String> {
 
 #[tauri::command]
 pub fn hidden_files_setting(value: bool) -> Result<(), String> {
-    let mut cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    cache.push("file-manager");
-    fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-    cache.push("settings.json");
-
-    let settings = serde_json::json!({ "show_hidden": value });
-    fs::write(cache, settings.to_string()).map_err(|e| e.to_string())
+    let mut settings = read_settings();
+    settings["show_hidden"] = serde_json::Value::Bool(value);
+    write_settings(&settings)
 }
 
 #[tauri::command]
 pub fn get_hidden_setting() -> Result<bool, String> {
+    Ok(read_settings()
+        .get("show_hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn background_setting(path: Option<String>) -> Result<(), String> {
+    let mut settings = read_settings();
+    match path {
+        Some(p) if !p.is_empty() => {
+            settings["background"] = serde_json::Value::String(p);
+        }
+        _ => {
+            settings["background"] = serde_json::Value::Null;
+        }
+    }
+    write_settings(&settings)
+}
+
+#[tauri::command]
+pub fn get_background_setting() -> Result<Option<String>, String> {
+    Ok(read_settings()
+        .get("background")
+        .and_then(|v| v.as_str())
+        .map(String::from))
+}
+
+#[tauri::command]
+pub async fn pick_image(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter(
+            "Images",
+            &["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg"],
+        )
+        .pick_file(move |f| {
+            let p = f
+                .and_then(|f| f.into_path().ok())
+                .map(|p| p.to_string_lossy().to_string());
+            let _ = tx.send(p);
+        });
+    rx.await
+        .map_err(|_| "file picker was interrupted".to_string())
+}
+
+#[tauri::command]
+pub fn load_image_data(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let p = PathBuf::from(&path);
+    let data = fs::read(&p).map_err(|e| format!("failed to read image: {}", e))?;
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    };
+    Ok(format!(
+        "data:{};base64,{}",
+        mime,
+        base64::engine::general_purpose::STANDARD.encode(data)
+    ))
+}
+
+fn settings_path() -> PathBuf {
     let mut cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
     cache.push("file-manager");
     cache.push("settings.json");
+    cache
+}
 
-    if cache.exists() {
-        let content = fs::read_to_string(&cache).map_err(|e| e.to_string())?;
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
-        Ok(parsed
-            .get("show_hidden")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false))
+fn read_settings() -> serde_json::Value {
+    let path = settings_path();
+    if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_default()
     } else {
-        Ok(false)
+        serde_json::json!({})
     }
+}
+
+fn write_settings(settings: &serde_json::Value) -> Result<(), String> {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
