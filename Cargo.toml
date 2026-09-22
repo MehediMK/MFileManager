@@ -20,7 +20,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 sysinfo = "0.39.6"
-tauri = "2.11.6"
+tauri = { version = "2.11.6", features = [] }
 tauri-plugin-clipboard-manager = "2.3.3"
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-fs = "2.5.2"
@@ -35,4 +35,4 @@ trash = "5.2.9"
 walkdir = "2.5.0"
 
 [build-dependencies]
-tauri-build = "2.6.3"
+tauri-build = { version = "2.6.3", features = [] }

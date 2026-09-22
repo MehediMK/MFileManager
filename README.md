@@ -13,8 +13,8 @@ A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**
 - 🔁 Find duplicate files by content hash (SHA-256)
 - 📝 Batch rename with pattern + counter
 - 👁️ Toggle hidden files (persisted setting)
-- 🖱️ Context menu (open, rename, copy, cut, delete, properties)
-- ⌨️ Keyboard shortcuts: `Ctrl+C/V`, `F2`, `Delete`, `Backspace`, `Ctrl+H`, `Ctrl+F`, `Ctrl+R`
+- 🖱️ Context menu (open, rename, copy, cut, paste, delete, properties)
+- ⌨️ Keyboard shortcuts: `Ctrl+C/V`, `Ctrl+N`, `Ctrl+T`, `F2`, `Delete`, `Backspace`, `Ctrl+H`, `Ctrl+F`, `Ctrl+R`
 - 🏠 Sidebar with Home, Desktop, and XDG user dirs
 - 📱 Dark theme, custom icons per file type
 - ⚡ Single binary, minimal memory footprint
@@ -29,13 +29,27 @@ A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**
 
 ## Prerequisites
 
-Ubuntu / Debian system packages (see `setup-deps.sh`):
+1. **Rust toolchain** (edition 2024):
 
-```bash
-./setup-deps.sh
-```
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
 
-Which installs: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, and build tools.
+2. **Tauri CLI** (needed for `cargo tauri dev` / `cargo tauri build`):
+
+   ```bash
+   cargo install tauri-cli --locked
+   ```
+
+3. **Ubuntu / Debian system packages** (see `setup-deps.sh`):
+
+   ```bash
+   ./setup-deps.sh
+   ```
+
+   Which installs: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libglib2.0-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libssl-dev`, `libxdo-dev`, and build tools.
+
+> The app's own commands are invoked via the Tauri global API, so `tauri.conf.json` sets `app.withGlobalTauri: true`. No `capabilities/` folder is required — custom commands are allowed by default.
 
 ## Build
 
@@ -101,7 +115,19 @@ file-manager/
 | `Ctrl+H` | Toggle hidden files |
 | `Ctrl+F` | Search |
 | `Ctrl+R` | Refresh |
+| `Ctrl+N` | New file |
+| `Ctrl+T` | Open terminal here |
 | `Ctrl+Click` | Multi-select |
+
+## Troubleshooting
+
+- **`pkg-config ... glib-2.0 was not found` / `webkit2gtk-4.1` missing when running `cargo build`:**
+  the Rust -dev system packages aren't installed. Run `./setup-deps.sh`.
+
+- **Window opens but shows an empty "Confirm / Cancel" dialog and nothing works:**
+  `src/frontend/styles.css` must define a `.hidden { display: none !important; }` rule (used by the modal/context menu/toast), and `tauri.conf.json` requires `"withGlobalTauri": true` — otherwise `window.__TAURI__` is undefined and `script.js` never starts.
+
+- **`error[E0433]: cannot find module or crate tauri_build` at `build.rs`:** the `tauri-build` build-dependency was dropped from `Cargo.toml`. Keep `[build-dependencies] tauri-build = "2"`.
 
 ## Contributing
 

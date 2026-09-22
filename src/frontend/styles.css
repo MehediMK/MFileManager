@@ -326,6 +326,10 @@ html, body {
     z-index: 2000;
 }
 
+.hidden {
+    display: none !important;
+}
+
 .modal {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
