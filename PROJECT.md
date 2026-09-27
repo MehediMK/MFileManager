@@ -139,19 +139,79 @@ Back/forward/up use `historyIndex`; these buttons read/write the active tab's hi
 - Toolbar `#search-input` (focus via `Ctrl+F`). Enter → `startSearch()` → `send('search_files')`.
 - Per-tab `isSearching`/`searchResults`; result rows reuse row events (contextmenu passes search result object).
 
+### 4.9 Security & safety
+- **Locking**: rows show a 🔒 badge (`entry.locked`); context menu toggles via `toggle_lock`.
+  `state.lockedSet` is rebuilt in `renderList`. Delete/rename/move pre-check in frontend AND backend.
+- **Permissions**: context menu `🔐 Permissions…` → `showPermissionsModal(path)` (rwx checkboxes ↔ octal,
+  Apply → `chmod_path`). Properties modal has a "Change…" link (`showProperties(path)` helper).
+- **Overwrite dialog**: `transferItems(paths, dstDir, action)` is the shared pipeline for paste
+  (`doCopy`) and drag&drop (`moveDropped`) — detects conflicts with `path_exists`, asks
+  `conflictDialog()` (Replace / Keep both / Skip / Cancel), then calls `copy_item`/`move_item` with
+  the chosen `mode`. Locked items are skipped on move with a toast.
+
+### 4.10 Power-user features
+- **Operation queue**: `runQueue(jobs)` pushes `{batch, job}` into `state.opQueue` (shared) and
+  `processQueue()` drains it serially, showing `⏳ Copying x…` in `#status-op`. Each batch resolves
+  with `{done, failed}`; `finishTransfer()` shows a modal with **Retry failed** when failures exist.
+  Both paste and drag&drop go through this — do NOT call `copy_item`/`move_item` directly elsewhere.
+- **In-app terminal**: `toggleTerminal(force)` calls `terminal_start` with the active tab's path
+  (no Tauri event API involved) and starts a **100 ms poll** of `terminal_read`, which drains the
+  backend output buffer; chunks are ANSI-stripped and appended to `#term-output` (capped at 200 KB).
+  Polling stops when the panel closes, restarts on reopen. `#term-input` keydown maps
+  keys/ctrl-combos to PTY bytes (`TERM_KEYS` map); an `input`-event fallback sends IME/composed
+  text (keydown `Process` is not dropped). Paste sends `\r`-normalized text. Close button only
+  hides the panel (session stays alive); reopening calls `terminal_start` again (backend no-ops if
+  alive, restarts if dead). **Failures are visible**: start errors → red toast "Terminal failed to
+  start: …", write errors → "Terminal input failed: …" (first only) plus console.error; a "not
+  running" write auto-restarts the session once and retries.
+- **In-app editor**: `showEditorModal(path)` → `read_file_text`, textarea in a `.modal.wide`
+  modal, Save → `write_file_text`; Close discards only after `safeConfirm`. Context menu `✏️ Edit`
+  (files only) + `F4` (single selection, lock-guarded).
+- **Sidebar filter**: `Ctrl+E` toggles `#sidebar-filter`; `input` event hides non-matching
+  `.sidebar-item`s and whole `.sidebar-section`s when empty (reset when query cleared).
+- **Custom columns**: rows use **flex** layout (not grid!) so any column can hide without
+  breaking alignment. Header cells `[data-col]` click → toggle `visibleCols` → `applyColumns()`
+  adds/removes `#files-view.hide-<col>` classes → `visible_columns_setting` persists.
+  Name column is not toggleable; responsive CSS additionally hides owner/perms ≤1150 px.
+
 ## 5. Backend commands (src/commands.rs) — full inventory
 
-Commands registered in `src/lib.rs` invoke_handler (17 + 4 new):
+Commands registered in `src/lib.rs` invoke_handler (34 total):
 `list_dir`, `file_info`, `create_dir`, `create_file`, `delete_path`, `rename_path`,
 `copy_item`, `move_item`, `home_dir`, `search_files`, `duplicates_search`,
 `batch_rename`, `disk_usage`, `recent_files`, `hidden_files_setting`,
 `get_hidden_setting`, `cli_open`, `open_terminal`, `preview_file`, `compress_zip`,
+`toggle_lock`, `chmod_path`, `path_exists`, `read_file_text`, `write_file_text`,
+`visible_columns_setting`, `get_visible_columns`,
+`terminal_start`, `terminal_read`, `terminal_write`, `terminal_kill`,
 plus background: `background_setting`, `get_background_setting`, `pick_image`, `load_image_data`.
+Terminal state lives in `.manage(commands::TerminalState::default())` (lib.rs).
 
 Key signatures / behavior:
 - `list_dir(path)` → `Vec<FileEntry>`; hides hidden files ONLY if `state.hiddenShown` (frontend filters; backend returns `hidden` flag per entry).
 - `delete_path(path, permanent)` — false → XDG trash via `trash` crate; true → `remove_dir_all`/`remove_file`.
-- `copy_item(src, dst_dir)` / `move_item(src, dst_dir)` — auto-rename `name (copy N).ext` on conflict.
+  **Locked guard**: returns Err if path is in the lock registry (§6).
+- `rename_path` / `move_item` — same locked guard; `batch_rename` silently skips locked files.
+- `copy_item(src, dst_dir, mode?)` / `move_item(src, dst_dir, mode?)` — `mode` is optional:
+  - `"auto"` (copy default) / `"keep"` → auto-rename `name (copy N).ext`
+  - `"replace"` → delete destination first (src==dest → Err, no self-clobber)
+  - `"skip"` → no-op if destination exists
+  - move default (None) → error if destination exists (legacy behaviour)
+  - Helpers: `unique_dest()` (naming), `remove_existing()` (replace).
+- `toggle_lock(path)` → flips lock in `locks.json`, returns new state (bool).
+- `chmod_path(path, mode)` → `Permissions::from_mode(mode & 0o777)`.
+- `path_exists(path)` → bool; used by frontend conflict detection.
+- `read_file_text(path)` / `write_file_text(path, content)` — in-app editor; 5 MB cap, binary (NUL byte)
+  refused, locked guard on write.
+- `visible_columns_setting(cols)` / `get_visible_columns()` — persisted in settings.json
+  (`visibleColumns`); default = all five columns.
+- `terminal_start(state, cwd)` / `terminal_read(state)` / `terminal_write(state, data)` /
+  `terminal_kill(state)` — in-app PTY via `portable-pty` (`$SHELL` or `/bin/sh`, 120×30,
+  `TERM=xterm-256color`). Reader thread appends lossy UTF-8 chunks to a shared `Arc<Mutex<String>>`
+  buffer (capped at 1 MB, marked `[process exited]` on EOF); `terminal_read` drains it — the
+  frontend polls it every 100 ms instead of using the event system. State =
+  `Mutex<TermInner { writer, child, master }>`; restarts itself if `try_wait()` shows the child
+  exited.
 - `search_files(path, query, depth)` — case-insensitive walk via `walkdir`.
 - `duplicates_search(path)` → groups by SHA-256 (`sha2 0.11` — hex via iterator, NOT `LowerHex` on finalize output, which changed in 0.11).
 - `disk_usage()` → `Vec<DiskInfo>` via `sysinfo`.
@@ -169,12 +229,15 @@ Key signatures / behavior:
 
 ## 6. Persistence (important)
 
-- **Hidden files / background**: single JSON at
+- **Hidden files / background / columns**: single JSON at
   `$XDG_CACHE_HOME/file-manager/settings.json` (usually `~/.cache/file-manager/settings.json`).
-  Shape: `{ "show_hidden": bool, "background": "/path/image" | null }`.
+  Shape: `{ "show_hidden": bool, "background": "/path/image" | null, "visibleColumns": [...str] }`.
   Access ONLY through `read_settings()` / `write_settings()` helpers in commands.rs — `hidden_files_setting`
   merges (does not overwrite) so the background survives.
 - **Recent files**: `~/.cache/file-manager/recent.json` — array of `RecentFile` (path, name, lastOpened).
+- **Locks**: `~/.cache/file-manager/locks.json` — array of locked path strings. Guards delete/rename/move
+  (`is_locked()` in commands.rs reads it per op). Lock is app-scoped, NOT chmod-based — unlocking never
+  touches real file permissions.
 - There is no other state; the frontend keeps everything in memory per-tab.
 
 ## 7. Dependencies (Cargo.toml)
@@ -183,7 +246,7 @@ Key crates: `tauri 2.x`, plugins `dialog`, `opener`, `clipboard-manager`, `shell
 `notification`, `process`, `http`, `log` (all registered in lib.rs — must match),
 `anyhow`, `chrono`(serde), `dirs`, `mime_guess`, `notify`, `serde`+`serde_json`,
 `sha2 0.11`, `sysinfo 0.39`, `tokio`(full), `trash`, `walkdir`, `base64 0.22`,
-`zip 4` (default-features=false, deflate).
+`zip 4` (default-features=false, deflate), `portable-pty 0.8` (in-app terminal).
 `[build-dependencies] tauri-build = "2.6"`.
 NOT present on purpose: `tauri-plugin-fs`, `tauri-plugin-global-shortcut`, macOS process-relaunch flag.
 
@@ -196,7 +259,9 @@ NOT present on purpose: `tauri-plugin-fs`, `tauri-plugin-global-shortcut`, macOS
   `--bg, --bg-secondary, --bg-hover, --bg-active, --text, --text-dim, --accent, --border, --danger, --success`).
 - **Add a context menu action**: add `.menu-item[data-action="x"]`, case in `handleAction`, and if it needs a target add to `needsItem`.
 - **No comments in code** unless the task asks for them (existing comments are deliberate/logic markers — keep them).
-- Run: `cargo fmt`, `cargo clippy -- -D warnings`, `cargo build`, `node --check src/frontend/script.js`.
+- Run: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo build`, `cargo test`,
+  `node --check src/frontend/script.js`.
+- Unit tests live in `src/commands.rs` `mod tests` (conflict modes, chmod, self-move guard).
 - Never commit secrets; keep `Cargo.lock` and `icons/` tracked.
 
 ## 9. Documentation & screenshots pipeline (docs/)
@@ -259,6 +324,14 @@ chmod +x file-manager
 ## 14. Current feature checklist (as of last update)
 
 - Tabs (Ctrl+T / Ctrl+W), per-tab history/selection/search
+- 🔒 File/folder locking (protects delete/rename/move, registry-based)
+- 🔐 Permissions editor (rwx + octal chmod dialog)
+- ⚠️ Overwrite protection (Replace / Keep both / Skip) on paste & drag&drop
+- 📝 In-app text editor (`✏️ Edit` / F4, 5 MB cap)
+- 💻 In-app PTY terminal panel (Ctrl+`)
+- 🔎 Sidebar live filter (Ctrl+E)
+- ⏳ Copy/move operation queue with progress + retry-failed
+- 🗂️ Custom columns: Type/Owner added, header-click toggle, persisted
 - Toolbar search box (Ctrl+F), recursive search
 - Copy/Cut/Paste + conflict rename; Move to Trash / permanent delete (in-app confirm)
 - Create/rename files & folders; batch rename; duplicates (SHA-256); disk usage

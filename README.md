@@ -15,11 +15,19 @@ A fast, modern file manager for Ubuntu/Linux built with **Rust** and **Tauri 2**
 - 📁 Browse directories with breadcrumbs, back/forward/up navigation
 - 📋 Copy / Cut / Paste with auto-rename on conflict (`name (copy 1).txt`)
 - 🗑️ Move to Trash (XDG trash) or delete permanently — in-app confirm dialog (no native popups)
+- 🔒 **Lock files/folders** — locked items show 🔒 and are protected from delete/rename/move (registry: `~/.cache/file-manager/locks.json`)
+- 🔐 **Permissions editor** — rwx checkboxes + octal input (e.g. `755`) per file/folder
+- ⚠️ **Safe overwrite protection** — paste/move conflict → Replace / Keep both / Skip dialog
 - ✏️ Rename, create files & folders
 - 👁️ **Preview pane** — image/audio/video/text inline preview + Open button
 - 🧱 **Compress to ZIP** — multi-select → archive (deflate)
 - 🖱️ **Drag & drop** move/copy onto folders, the `..` row, or sidebar (Ctrl = copy)
 - 🕒 **Recent Files** — recent items listed in a dialog (navigate to parent)
+- 📝 **In-app text editor** — `✏️ Edit` / `F4` opens text files with Save (5 MB max, binary refused, locked files guarded)
+- 💻 **In-app terminal panel** — PTY shell inside the window (`Ctrl+backtick`) with clear/close buttons
+- 🔎 **Sidebar filter** — `Ctrl+E` shows a live filter box for Places/Shortcuts/Devices
+- ⏳ **Operation queue** — copy/move jobs run sequentially with statusbar progress; failures give a **Retry failed** dialog
+- 🗂️ **Custom columns** — Type / Size / Modified / Owner / Permissions; click a header cell to toggle (persisted)
 - 🖼️ **Custom background image** (set via `🖼️` or context menu, persisted between launches)
 - 💻 **Open Terminal here** in the current folder (detects gnome-terminal, konsole, xfce4-terminal, xterm, …)
 - 📊 Disk usage panel (per mount point)
@@ -140,6 +148,12 @@ file-manager/
 | `open_terminal` | Open terminal in a folder (auto-detect emulator) |
 | `preview_file` | Text/image/audio/video preview payload |
 | `compress_zip` | Create ZIP archive from selected paths |
+| `toggle_lock` | Lock/unlock a file or folder (delete/rename/move guard) |
+| `chmod_path` | Set Unix permissions (octal mode) |
+| `path_exists` | Check whether a path exists (conflict detection) |
+| `read_file_text` / `write_file_text` | In-app editor (5 MB cap, binary refused) |
+| `visible_columns_setting` / `get_visible_columns` | Persist visible column list |
+| `terminal_start` / `terminal_read` / `terminal_write` / `terminal_kill` | In-app PTY terminal (`portable-pty`; frontend polls `terminal_read` for output) |
 | `home_dir` / `cli_open` | Helpers |
 
 ## Shortcuts
@@ -158,6 +172,9 @@ file-manager/
 | `Ctrl+T` | New tab |
 | `Ctrl+W` | Close tab |
 | `Ctrl+Alt+T` | Open terminal here |
+| `F4` | Edit selected file in-app |
+| `Ctrl+E` | Toggle sidebar filter |
+| `Ctrl+backtick` | Toggle in-app terminal panel |
 | `Ctrl+Click` | Multi-select |
 
 ## Troubleshooting

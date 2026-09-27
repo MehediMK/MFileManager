@@ -9,6 +9,7 @@
 <body>
     <div id="app">
         <aside id="sidebar">
+            <input type="text" id="sidebar-filter" class="hidden" placeholder="Filter (Ctrl+E)" autocomplete="off">
             <div class="sidebar-section">
                 <h3>Places</h3>
                 <div id="recent-places"></div>
@@ -70,9 +71,11 @@
                 <div id="files-view">
                     <div id="file-list-header">
                         <span class="col-name">Name</span>
-                        <span class="col-size">Size</span>
-                        <span class="col-modified">Modified</span>
-                        <span class="col-perms">Permissions</span>
+                        <span class="col-type" data-col="type" title="Click to show/hide column">Type</span>
+                        <span class="col-size" data-col="size" title="Click to show/hide column">Size</span>
+                        <span class="col-modified" data-col="modified" title="Click to show/hide column">Modified</span>
+                        <span class="col-owner" data-col="owner" title="Click to show/hide column">Owner</span>
+                        <span class="col-perms" data-col="perms" title="Click to show/hide column">Perm</span>
                     </div>
                     <div id="file-list"></div>
                 </div>
@@ -81,9 +84,22 @@
                 </aside>
             </div>
 
+            <div id="terminal-panel" class="hidden">
+                <div id="terminal-head">
+                    <span>💻 Terminal</span>
+                    <div class="term-btns">
+                        <button id="term-clear" title="Clear output">🧹</button>
+                        <button id="term-close" title="Close terminal panel">✕</button>
+                    </div>
+                </div>
+                <pre id="term-output"></pre>
+                <input type="text" id="term-input" placeholder="type here…" autocomplete="off" spellcheck="false">
+            </div>
+
             <footer id="statusbar">
                 <span id="status-count">0 items</span>
                 <span id="status-selection"></span>
+                <span id="status-op"></span>
                 <span id="status-canpaste"></span>
             </footer>
         </main>
@@ -93,6 +109,7 @@
             <div class="menu-item" data-action="open">Open</div>
             <div class="menu-item" data-action="preview">👁 Preview</div>
             <div class="menu-item" data-action="rename">Rename</div>
+            <div class="menu-item" data-action="edit">✏️ Edit</div>
             <div class="menu-item" data-action="copy">Copy</div>
             <div class="menu-item" data-action="cut">Cut</div>
             <div class="menu-item" data-action="paste">Paste</div>
@@ -106,10 +123,13 @@
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="search">🔍 Search</div>
             <div class="menu-item" data-action="terminal">⌨️ Open Terminal</div>
+            <div class="menu-item" data-action="terminal-app">💻 In-app Terminal</div>
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="set-background">🖼️ Set Background</div>
             <div class="menu-item" data-action="reset-background">🧹 Reset Background</div>
             <div class="menu-divider"></div>
+            <div class="menu-item" data-action="lock">🔒 Lock</div>
+            <div class="menu-item" data-action="permissions">🔐 Permissions…</div>
             <div class="menu-item" data-action="properties">Properties</div>
         </div>
 

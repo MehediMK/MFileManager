@@ -41,11 +41,24 @@
             batch_rename: async () => [],
             recent_files: async () => [],
             get_background_setting: async () => null,
+            get_visible_columns: async () => ['type','size','modified','owner','perms'],
+            visible_columns_setting: async () => {},
+            read_file_text: async () => 'hello',
+            write_file_text: async () => {},
+            path_exists: async () => false,
+            terminal_start: async () => { window.__termStarts = (window.__termStarts||0)+1; },
+            terminal_write: async ({ data }) => { if (location.search.includes('failwrite')) throw 'terminal is not running'; (window.__termWrites = window.__termWrites||[]).push(data); window.__termBuf = (window.__termBuf || '') + data; },
+            terminal_read: async () => { window.__readCalls = (window.__readCalls||0)+1; const b = window.__termBuf || ''; window.__termBuf = ''; return b ? b + '\r\n' : ''; },
+            terminal_kill: async () => {},
         };
-        window.__TAURI__ = { core: { invoke: (cmd, args) => handlers[cmd](args || {}) } };
+        window.__TAURI__ = {
+            core: { invoke: (cmd, args) => (handlers[cmd] || (() => { throw new Error('no handler '+cmd); }))(args || {}) },
+            event: { listen: async (name, cb) => { (window.__listeners = window.__listeners||{}); (window.__listeners[name] = window.__listeners[name]||[]).push(cb); return () => {}; } },
+        };
     </script>
     <div id="app">
         <aside id="sidebar">
+            <input type="text" id="sidebar-filter" class="hidden" placeholder="Filter (Ctrl+E)" autocomplete="off">
             <div class="sidebar-section">
                 <h3>Places</h3>
                 <div id="recent-places"></div>
@@ -107,9 +120,11 @@
                 <div id="files-view">
                     <div id="file-list-header">
                         <span class="col-name">Name</span>
-                        <span class="col-size">Size</span>
-                        <span class="col-modified">Modified</span>
-                        <span class="col-perms">Permissions</span>
+                        <span class="col-type" data-col="type" title="Click to show/hide column">Type</span>
+                        <span class="col-size" data-col="size" title="Click to show/hide column">Size</span>
+                        <span class="col-modified" data-col="modified" title="Click to show/hide column">Modified</span>
+                        <span class="col-owner" data-col="owner" title="Click to show/hide column">Owner</span>
+                        <span class="col-perms" data-col="perms" title="Click to show/hide column">Perm</span>
                     </div>
                     <div id="file-list"></div>
                 </div>
@@ -118,9 +133,22 @@
                 </aside>
             </div>
 
+            <div id="terminal-panel" class="hidden">
+                <div id="terminal-head">
+                    <span>&#128187; Terminal</span>
+                    <div class="term-btns">
+                        <button id="term-clear" title="Clear output">&#129533;</button>
+                        <button id="term-close" title="Close terminal panel">&#10005;</button>
+                    </div>
+                </div>
+                <pre id="term-output"></pre>
+                <input type="text" id="term-input" placeholder="type here&hellip;" autocomplete="off" spellcheck="false">
+            </div>
+
             <footer id="statusbar">
                 <span id="status-count">0 items</span>
                 <span id="status-selection"></span>
+                <span id="status-op"></span>
                 <span id="status-canpaste"></span>
             </footer>
         </main>
@@ -130,6 +158,7 @@
             <div class="menu-item" data-action="open">Open</div>
             <div class="menu-item" data-action="preview">👁 Preview</div>
             <div class="menu-item" data-action="rename">Rename</div>
+            <div class="menu-item" data-action="edit">&#9999;&#65039; Edit</div>
             <div class="menu-item" data-action="copy">Copy</div>
             <div class="menu-item" data-action="cut">Cut</div>
             <div class="menu-item" data-action="paste">Paste</div>
@@ -143,10 +172,13 @@
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="search">🔍 Search</div>
             <div class="menu-item" data-action="terminal">⌨️ Open Terminal</div>
+            <div class="menu-item" data-action="terminal-app">💻 In-app Terminal</div>
             <div class="menu-divider"></div>
             <div class="menu-item" data-action="set-background">🖼️ Set Background</div>
             <div class="menu-item" data-action="reset-background">🧹 Reset Background</div>
             <div class="menu-divider"></div>
+            <div class="menu-item" data-action="lock">🔒 Lock</div>
+            <div class="menu-item" data-action="permissions">🔐 Permissions…</div>
             <div class="menu-item" data-action="properties">Properties</div>
         </div>
 

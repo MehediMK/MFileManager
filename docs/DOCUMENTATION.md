@@ -57,17 +57,29 @@ File Manager is a desktop file explorer designed for speed and simplicity on Lin
 | Feature | Description |
 |---------|-------------|
 | Directory browsing | Back/forward/up navigation, path bar, breadcrumb support |
-| Name search | Recursive, case-insensitive search with configurable depth |
+| Tabs | Multiple folders in one window; per-tab history, selection & search (`Ctrl+T` / `Ctrl+W`) |
+| Name search | Recursive, case-insensitive search with configurable depth + toolbar search box (`Ctrl+F`) |
 | Copy / Cut / Paste | Auto-rename on conflict, e.g. `photo (copy 1).jpg` |
+| Overwrite protection | On conflict: **Replace / Keep both / Skip** dialog (paste, move & drag & drop) |
 | Move to Trash | Safe delete via XDG Trash; permanent delete also available |
-| Create / Rename | Create files and folders, rename in place |
+| File locking | 🔒 lock protects files/folders from delete/rename/move (context menu toggle) |
+| Permissions editor | 🔐 rwx checkboxes + octal mode (e.g. `755`) per file |
+| Create / Rename | Create files and folders, rename in place, batch rename |
+| In-app editor | ✏️ Edit / `F4` opens text files with Save (5 MB max, binary refused) |
+| In-app terminal | 💻 PTY shell panel inside the window (`Ctrl+backtick`) |
+| Preview pane | Image / audio / video / text preview with `👁` toggle |
+| Compress to ZIP | Multi-select → `.zip` archive (deflate) |
+| Drag & drop | Move/copy onto folders, `..` row, or sidebar (Ctrl = copy) |
+| Operation queue | Copy/move jobs run sequentially with progress + **Retry failed** |
+| Custom columns | Type / Size / Modified / Owner / Permissions — click header to toggle (persisted) |
+| Sidebar filter | `Ctrl+E` live-filters Places/Shortcuts/Devices |
+| Recent files | 🕒 recent items dialog (navigate to parent) |
+| Background image | 🖼️ custom background, persisted between launches |
 | Duplicate finder | Groups duplicate files by size, then SHA-256 content hash |
-| Batch rename | Pattern + counter with zero-padding, e.g. `photo_001` |
 | Disk usage | Per mount-point total / used / free with percentages |
 | Hidden files | Toggle visibility (setting persisted on disk) |
-| Sidebar | Home, Desktop, and XDG user directories + mounted devices |
-| Context menu | Open, rename, copy, cut, paste, delete, properties |
-| Terminal | Open a terminal at the current folder (`Ctrl+T`) |
+| Sidebar | Home, Desktop, XDG user directories + mounted devices |
+| Context menu | Open, preview, edit, rename, copy, cut, paste, lock, permissions, delete, compress, properties, terminal |
 | Dark theme | System-native dark UI with per-file-type icons |
 
 ---
@@ -143,13 +155,18 @@ sudo apt install ./target/release/bundle/deb/file-manager_0.1.0_amd64.deb
 | `Backspace` | Go up one folder |
 | `Delete` | Move selected items to Trash |
 | `F2` | Rename selected item |
-| `Ctrl+C` | Copy selection |
-| `Ctrl+V` | Paste clipboard |
+| `F4` | Edit selected file in-app |
+| `Ctrl+C` / `Ctrl+V` | Copy selection / Paste clipboard |
 | `Ctrl+H` | Toggle hidden files |
 | `Ctrl+F` | Search by file name |
 | `Ctrl+R` | Refresh current folder |
 | `Ctrl+N` | Create a new file |
-| `Ctrl+T` | Open terminal in current folder |
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close tab |
+| `Ctrl+Alt+T` | Open system terminal in current folder |
+| `Ctrl+E` | Toggle sidebar filter |
+| `Ctrl+backtick` | Toggle in-app terminal panel |
+| `Ctrl+Click` | Multi-select |
 
 ---
 

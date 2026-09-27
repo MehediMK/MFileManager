@@ -5,7 +5,7 @@ use mime_guess::from_path;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -30,6 +30,289 @@ fn format_time(ts: Option<std::time::SystemTime>) -> String {
     }
 }
 
+// ----- Lock registry (~/.cache/file-manager/locks.json) -----
+
+fn locks_path() -> PathBuf {
+    let mut cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    cache.push("file-manager");
+    cache.push("locks.json");
+    cache
+}
+
+fn read_lock_set() -> std::collections::HashSet<String> {
+    let path = locks_path();
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Vec<String>>(&c).ok())
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default()
+}
+
+fn write_lock_set(set: &std::collections::HashSet<String>) -> Result<(), String> {
+    let path = locks_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut list: Vec<&String> = set.iter().collect();
+    list.sort();
+    let content = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| e.to_string())
+}
+
+fn is_locked(path: &str) -> bool {
+    read_lock_set().contains(path)
+}
+
+// uid → username via /etc/passwd (parsed once)
+fn owner_of(uid: u32) -> String {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<HashMap<u32, String>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| {
+        let mut m = HashMap::new();
+        if let Ok(text) = fs::read_to_string("/etc/passwd") {
+            for line in text.lines() {
+                let mut parts = line.split(':');
+                let name = parts.next().unwrap_or_default().to_string();
+                let _pw = parts.next();
+                if let Some(uid) = parts.next().and_then(|s| s.parse::<u32>().ok()) {
+                    m.entry(uid).or_insert(name);
+                }
+            }
+        }
+        m
+    });
+    map.get(&uid).cloned().unwrap_or_else(|| uid.to_string())
+}
+
+#[tauri::command]
+pub fn toggle_lock(path: String) -> Result<bool, String> {
+    let mut set = read_lock_set();
+    let now_locked = if set.contains(&path) {
+        set.remove(&path);
+        false
+    } else {
+        set.insert(path.clone());
+        true
+    };
+    write_lock_set(&set)?;
+    log::info!(
+        "{} {}",
+        if now_locked { "locked" } else { "unlocked" },
+        path
+    );
+    Ok(now_locked)
+}
+
+#[tauri::command]
+pub fn chmod_path(path: String, mode: u32) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("{} does not exist", path));
+    }
+    fs::set_permissions(&p, fs::Permissions::from_mode(mode & 0o777))
+        .map_err(|e| format!("failed to set permissions: {}", e))
+}
+
+#[tauri::command]
+pub fn path_exists(path: String) -> bool {
+    PathBuf::from(path).exists()
+}
+
+// ----- In-app text editor -----
+
+#[tauri::command]
+pub fn read_file_text(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    let meta = fs::metadata(&p).map_err(|e| format!("cannot open for editing: {}", e))?;
+    if meta.is_dir() {
+        return Err("cannot edit a directory".to_string());
+    }
+    if meta.len() > 5_000_000 {
+        return Err("file too large to edit (5 MB max)".to_string());
+    }
+    let bytes = fs::read(&p).map_err(|e| format!("failed to read: {}", e))?;
+    if bytes.contains(&0) {
+        return Err("binary file — cannot edit as text".to_string());
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tauri::command]
+pub fn write_file_text(path: String, content: String) -> Result<(), String> {
+    if is_locked(&path) {
+        return Err(format!("{} is locked — unlock it before editing", path));
+    }
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("{} no longer exists", path));
+    }
+    fs::write(&p, content).map_err(|e| format!("failed to save: {}", e))
+}
+
+// ----- Visible columns setting -----
+
+#[tauri::command]
+pub fn visible_columns_setting(cols: Vec<String>) -> Result<(), String> {
+    let mut settings = read_settings();
+    settings["visibleColumns"] = serde_json::json!(cols);
+    write_settings(&settings)
+}
+
+#[tauri::command]
+pub fn get_visible_columns() -> Result<Vec<String>, String> {
+    Ok(read_settings()
+        .get("visibleColumns")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "type".into(),
+                "size".into(),
+                "modified".into(),
+                "owner".into(),
+                "perms".into(),
+            ]
+        }))
+}
+
+// ----- In-app terminal (portable-pty, polling output) -----
+
+#[derive(Default)]
+pub struct TerminalState {
+    inner: std::sync::Mutex<TermInner>,
+    /// Output produced by the shell, drained by `terminal_read`.
+    buffer: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+#[derive(Default)]
+struct TermInner {
+    writer: Option<Box<dyn std::io::Write + Send>>,
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+}
+
+#[tauri::command]
+pub fn terminal_start(state: tauri::State<'_, TerminalState>, cwd: String) -> Result<(), String> {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    let alive = match inner.child.as_mut() {
+        Some(c) => matches!(c.try_wait(), Ok(None)),
+        None => false,
+    };
+    if alive {
+        return Ok(());
+    }
+    inner.child = None;
+    inner.writer = None;
+    inner.master = None;
+    state.buffer.lock().map_err(|e| e.to_string())?.clear();
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("failed to open pty: {}", e))?;
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let mut cmd = CommandBuilder::new(&shell);
+    let dir = if cwd.is_empty() {
+        dirs_home().unwrap_or_else(|_| "/".to_string())
+    } else {
+        cwd
+    };
+    cmd.cwd(&dir);
+    cmd.env("TERM", "xterm-256color");
+
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("failed to start shell {}: {}", shell, e))?;
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("pty reader: {}", e))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("pty writer: {}", e))?;
+
+    let buffer = std::sync::Arc::clone(&state.buffer);
+    log::info!("terminal started: {} in {}", shell, dir);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Ok(mut b) = buffer.lock() {
+                        b.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        // cap so a hidden panel cannot grow memory forever
+                        if b.len() > 1_000_000 {
+                            let mut cut = b.len() - 400_000;
+                            while !b.is_char_boundary(cut) {
+                                cut += 1;
+                            }
+                            b.drain(..cut);
+                        }
+                    }
+                }
+            }
+        }
+        log::info!("terminal reader closed (shell exited)");
+        if let Ok(mut b) = buffer.lock() {
+            b.push_str("\n[process exited]\n");
+        }
+    });
+
+    inner.master = Some(pair.master);
+    inner.child = Some(child);
+    inner.writer = Some(writer);
+    Ok(())
+}
+
+/// Drain output produced since the last call (frontend polls every ~100 ms).
+#[tauri::command]
+pub fn terminal_read(state: tauri::State<'_, TerminalState>) -> Result<String, String> {
+    let mut b = state.buffer.lock().map_err(|e| e.to_string())?;
+    Ok(std::mem::take(&mut *b))
+}
+
+#[tauri::command]
+pub fn terminal_write(state: tauri::State<'_, TerminalState>, data: String) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    let writer = inner
+        .writer
+        .as_mut()
+        .ok_or_else(|| "terminal is not running".to_string())?;
+    writer
+        .write_all(data.as_bytes())
+        .map_err(|e| format!("write failed: {}", e))?;
+    let _ = writer.flush();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn terminal_kill(state: tauri::State<'_, TerminalState>) -> Result<(), String> {
+    let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
+    if let Some(mut child) = inner.child.take() {
+        let _ = child.kill();
+    }
+    inner.writer = None;
+    inner.master = None;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_dir(path: String) -> Result<Vec<FileEntry>, String> {
     let p = PathBuf::from(&path);
@@ -39,6 +322,7 @@ pub fn list_dir(path: String) -> Result<Vec<FileEntry>, String> {
 
     let mut entries = Vec::new();
     let read_dir = fs::read_dir(&p).map_err(|e| format!("failed to read {}: {}", path, e))?;
+    let locks = read_lock_set();
 
     for entry in read_dir {
         let entry = match entry {
@@ -52,6 +336,9 @@ pub fn list_dir(path: String) -> Result<Vec<FileEntry>, String> {
 
         let name = entry.file_name().to_string_lossy().to_string();
         let hidden = name.starts_with('.') || meta.file_type().is_symlink();
+        let entry_path = entry.path().to_string_lossy().to_string();
+        let locked = locks.contains(&entry_path);
+        let owner = owner_of(meta.uid());
 
         let extension = if meta.is_file() {
             Path::new(&name)
@@ -67,7 +354,7 @@ pub fn list_dir(path: String) -> Result<Vec<FileEntry>, String> {
 
         entries.push(FileEntry::new(
             name,
-            entry.path().to_string_lossy().to_string(),
+            entry_path,
             meta.is_dir(),
             meta.file_type().is_symlink(),
             meta.len(),
@@ -77,6 +364,8 @@ pub fn list_dir(path: String) -> Result<Vec<FileEntry>, String> {
             extension,
             mime,
             hidden,
+            owner,
+            locked,
         ));
     }
 
@@ -120,6 +409,8 @@ pub fn file_info(path: String) -> Result<FileEntry, String> {
         extension,
         mime,
         path.starts_with("."),
+        owner_of(meta.uid()),
+        is_locked(&path),
     ))
 }
 
@@ -142,6 +433,15 @@ pub fn create_file(parent: String, name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_path(path: String, permanent: bool) -> Result<(), String> {
+    if is_locked(&path) {
+        return Err(format!(
+            "{} is locked — unlock it before deleting",
+            Path::new(&path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or(path)
+        ));
+    }
     if permanent {
         let p = PathBuf::from(&path);
         if p.is_dir() {
@@ -158,6 +458,12 @@ pub fn delete_path(path: String, permanent: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub fn rename_path(old_path: String, new_name: String) -> Result<(), String> {
+    if is_locked(&old_path) {
+        return Err(format!(
+            "{} is locked — unlock it before renaming",
+            old_path
+        ));
+    }
     let src = PathBuf::from(&old_path);
     let parent = src
         .parent()
@@ -171,34 +477,62 @@ pub fn rename_path(old_path: String, new_name: String) -> Result<(), String> {
     fs::rename(&src, &dst).map_err(|e| format!("failed to rename: {}", e))
 }
 
-#[tauri::command]
-pub fn copy_item(src: String, dst_dir: String) -> Result<(), String> {
-    let source = PathBuf::from(&src);
-    let name = source
-        .file_name()
-        .ok_or_else(|| "cannot determine filename".to_string())?;
-    let dest = PathBuf::from(&dst_dir).join(name);
-
-    // Handle name conflicts
-    let mut final_dest = dest.clone();
+// Auto-rename destination: "name (copy 1).ext" until free
+fn unique_dest(dest: &Path, source: &Path) -> PathBuf {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = source
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_default();
     let mut counter = 1;
-    while final_dest.exists() {
-        let stem = source
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let ext = source
-            .extension()
-            .map(|e| e.to_string_lossy().to_string())
-            .unwrap_or_default();
-
+    loop {
         let new_name = if ext.is_empty() {
             format!("{} (copy {})", stem, counter)
         } else {
             format!("{} (copy {}).{}", stem, counter, ext)
         };
-        final_dest = PathBuf::from(&dst_dir).join(new_name);
+        let candidate = parent.join(new_name);
+        if !candidate.exists() {
+            return candidate;
+        }
         counter += 1;
+    }
+}
+
+fn remove_existing(dest: &Path) -> Result<(), String> {
+    if dest.is_dir() {
+        fs::remove_dir_all(dest).map_err(|e| format!("failed to replace {}: {}", dest.display(), e))
+    } else {
+        fs::remove_file(dest).map_err(|e| format!("failed to replace {}: {}", dest.display(), e))
+    }
+}
+
+#[tauri::command]
+pub fn copy_item(src: String, dst_dir: String, mode: Option<String>) -> Result<(), String> {
+    let source = PathBuf::from(&src);
+    let name = source
+        .file_name()
+        .ok_or_else(|| "cannot determine filename".to_string())?;
+    let dest = PathBuf::from(&dst_dir).join(name);
+    let mode = mode.unwrap_or_else(|| "auto".to_string());
+
+    let mut final_dest = dest.clone();
+    if dest.exists() {
+        match mode.as_str() {
+            "skip" => return Ok(()),
+            "replace" => {
+                if source == dest {
+                    return Err("source and destination are the same file".to_string());
+                }
+                remove_existing(&dest)?;
+            }
+            // "auto" / "keep" → auto-rename
+            _ => final_dest = unique_dest(&dest, &source),
+        }
     }
 
     if source.is_dir() {
@@ -227,21 +561,39 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 #[tauri::command]
-pub fn move_item(src: String, dst_dir: String) -> Result<(), String> {
+pub fn move_item(src: String, dst_dir: String, mode: Option<String>) -> Result<(), String> {
+    if is_locked(&src) {
+        return Err(format!("{} is locked — unlock it before moving", src));
+    }
     let source = PathBuf::from(&src);
     let name = source
         .file_name()
         .ok_or_else(|| "cannot determine filename".to_string())?;
     let dest = PathBuf::from(&dst_dir).join(name);
+    let mode = mode.unwrap_or_default();
 
-    if dest.exists() {
-        return Err(format!(
-            "{} already exists at destination",
-            name.to_string_lossy()
-        ));
+    if source == dest {
+        return Err("source and destination are the same file".to_string());
     }
 
-    fs::rename(&source, &dest).map_err(|e| format!("failed to move: {}", e))
+    let mut final_dest = dest.clone();
+    if dest.exists() {
+        match mode.as_str() {
+            "skip" => return Ok(()),
+            "replace" => remove_existing(&dest)?,
+            // "auto" / "keep" → auto-rename at destination
+            "auto" | "keep" => final_dest = unique_dest(&dest, &source),
+            // default: previous behaviour (error out)
+            _ => {
+                return Err(format!(
+                    "{} already exists at destination",
+                    name.to_string_lossy()
+                ));
+            }
+        }
+    }
+
+    fs::rename(&source, &final_dest).map_err(|e| format!("failed to move: {}", e))
 }
 
 #[tauri::command]
@@ -259,6 +611,7 @@ pub fn search_files(
     };
 
     let mut results = Vec::new();
+    let locks = read_lock_set();
     let walker = WalkDir::new(&base)
         .max_depth(max_depth)
         .follow_links(false)
@@ -289,6 +642,7 @@ pub fn search_files(
                 is_dir: meta.is_dir(),
                 size: meta.len(),
                 modified: format_time(meta.modified().ok()),
+                locked: locks.contains(&entry.path().to_string_lossy().to_string()),
             });
         }
     }
@@ -407,6 +761,9 @@ pub fn batch_rename(
             format!("{}_{}.{}", pattern, number, ext)
         };
 
+        if is_locked(&p.to_string_lossy()) {
+            continue;
+        }
         let new_path = base.join(&new_name);
         if fs::rename(&p, &new_path).is_ok() {
             renamed.push((name.clone(), new_name));
@@ -781,4 +1138,171 @@ pub fn compress_zip(items: Vec<String>, dest_dir: String, name: String) -> Resul
         .map_err(|e| format!("failed to write archive: {}", e))?;
     log::info!("created archive {}", dest.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fm-test-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn copy_conflict_modes() {
+        let d = test_dir("copy");
+        let src = d.join("a.txt");
+        fs::write(&src, "old-src").unwrap();
+        let dst = d.join("out");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("a.txt"), "existing").unwrap();
+
+        copy_item(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some("skip".into()),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "existing");
+
+        copy_item(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some("replace".into()),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "old-src");
+
+        copy_item(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some("keep".into()),
+        )
+        .unwrap();
+        assert!(dst.join("a (copy 1).txt").exists());
+
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn move_conflict_modes() {
+        let d = test_dir("move");
+        let src = d.join("b.txt");
+        fs::write(&src, "from-src").unwrap();
+        let dst = d.join("out");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("b.txt"), "existing").unwrap();
+
+        move_item(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some("skip".into()),
+        )
+        .unwrap();
+        assert!(src.exists());
+        assert_eq!(fs::read_to_string(dst.join("b.txt")).unwrap(), "existing");
+
+        move_item(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some("replace".into()),
+        )
+        .unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read_to_string(dst.join("b.txt")).unwrap(), "from-src");
+
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn move_same_path_rejected() {
+        let d = test_dir("same");
+        let f = d.join("c.txt");
+        fs::write(&f, "x").unwrap();
+        let parent = d.to_string_lossy().to_string();
+        assert!(
+            move_item(
+                f.to_string_lossy().to_string(),
+                parent,
+                Some("replace".into())
+            )
+            .is_err()
+        );
+        assert!(f.exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn chmod_sets_mode() {
+        let d = test_dir("chmod");
+        let f = d.join("script.sh");
+        fs::write(&f, "#!/bin/sh\n").unwrap();
+        chmod_path(f.to_string_lossy().to_string(), 0o755).unwrap();
+        let mode = fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn path_exists_works() {
+        let d = test_dir("exists");
+        assert!(path_exists(d.to_string_lossy().to_string()));
+        assert!(!path_exists(d.join("nope").to_string_lossy().to_string()));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// End-to-end check of the PTY mechanics used by terminal_start:
+    /// spawn shell on a pty → write command bytes → shell output readable.
+    #[test]
+    fn pty_shell_echoes_output() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::io::{Read, Write as _};
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.env("TERM", "xterm-256color");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = String::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        out.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if out.contains("FM-PTY-OK") || out.len() > 65536 {
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = tx.send(out);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        writer.write_all(b"echo FM-PTY-OK\n").unwrap();
+        writer.flush().unwrap();
+
+        let out = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("no output from pty shell");
+        assert!(out.contains("FM-PTY-OK"), "pty output: {:?}", out);
+        let _ = child.kill();
+    }
 }

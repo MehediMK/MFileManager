@@ -180,6 +180,79 @@ html, body {
     white-space: nowrap;
 }
 
+/* Lock badge */
+.lock-badge {
+    margin-left: 6px;
+    font-size: 12px;
+}
+
+/* Permissions modal */
+.perm-name {
+    font-weight: 600;
+    margin-bottom: 8px;
+    word-break: break-word;
+}
+.perm-grid td.value {
+    text-align: center;
+}
+.perm-grid input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 16px;
+    height: 16px;
+}
+.link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 6px;
+    text-decoration: underline;
+}
+.link-btn:hover {
+    color: var(--text);
+}
+
+/* Overwrite conflict dialog */
+.conflict-sub {
+    color: var(--text-dim);
+    font-size: 13px;
+}
+.conflict-list {
+    max-height: 30vh;
+    overflow-y: auto;
+    margin: 8px 0;
+    padding-left: 18px;
+    font-size: 13px;
+}
+.conflict-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+.conflict-actions button {
+    flex: 1;
+    padding: 9px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+}
+.conflict-actions button:hover {
+    border-color: var(--accent);
+    background: var(--bg-hover);
+}
+.conflict-actions .conflict-replace {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+}
+.conflict-actions .conflict-replace:hover {
+    filter: brightness(1.1);
+}
+
 /* Toolbar */
 /* Tab bar */
 #tab-bar {
@@ -406,12 +479,12 @@ html, body {
         width: auto;
     }
     #file-list-header, .file-row {
-        grid-template-columns: 2.5fr 1fr 1.4fr;
+        gap: 6px;
     }
-    .col-perms {
+    .col-perms, .file-perms {
         display: none;
     }
-    .file-perms {
+    .col-owner, .file-owner {
         display: none;
     }
 }
@@ -437,8 +510,7 @@ body.sidebar-collapsed #sidebar {
 }
 
 #file-list-header {
-    display: grid;
-    grid-template-columns: 3fr 1fr 1.5fr 0.8fr;
+    display: flex;
     gap: 8px;
     padding: 6px 16px;
     font-size: 12px;
@@ -465,8 +537,7 @@ body.sidebar-collapsed #sidebar {
 }
 
 .file-row {
-    display: grid;
-    grid-template-columns: 3fr 1fr 1.5fr 0.8fr;
+    display: flex;
     gap: 8px;
     align-items: center;
     padding: 6px 16px;
@@ -474,6 +545,31 @@ body.sidebar-collapsed #sidebar {
     cursor: pointer;
     transition: background 0.1s;
     white-space: nowrap;
+}
+
+/* Column layout (shared widths for header + rows; hide via #files-view.hide-*) */
+.file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.col-type, .file-type { width: 74px; flex-shrink: 0; }
+.col-size, .file-size { width: 86px; flex-shrink: 0; }
+.col-modified, .file-modified { width: 132px; flex-shrink: 0; }
+.col-owner, .file-owner { width: 86px; flex-shrink: 0; }
+.col-perms, .file-perms { width: 54px; flex-shrink: 0; }
+#file-list-header [data-col] {
+    cursor: pointer;
+    user-select: none;
+}
+#file-list-header [data-col]:hover {
+    color: var(--text);
+}
+#files-view.hide-type .file-type, #files-view.hide-type .col-type,
+#files-view.hide-size .file-size, #files-view.hide-size .col-size,
+#files-view.hide-modified .file-modified, #files-view.hide-modified .col-modified,
+#files-view.hide-owner .file-owner, #files-view.hide-owner .col-owner,
+#files-view.hide-perms .file-perms, #files-view.hide-perms .col-perms {
+    display: none;
 }
 
 .file-row:hover {
@@ -507,7 +603,7 @@ body.sidebar-collapsed #sidebar {
     text-overflow: ellipsis;
 }
 
-.file-size, .file-modified, .file-perms {
+.file-size, .file-modified, .file-perms, .file-type, .file-owner {
     font-size: 13px;
     color: var(--text-dim);
     overflow: hidden;
@@ -520,7 +616,9 @@ body.sidebar-collapsed #sidebar {
 
 .file-row.selected .file-size,
 .file-row.selected .file-modified,
-.file-row.selected .file-perms {
+.file-row.selected .file-perms,
+.file-row.selected .file-type,
+.file-row.selected .file-owner {
     color: var(--text);
 }
 
@@ -747,4 +845,104 @@ body.sidebar-collapsed #sidebar {
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--bg-active);
+}
+/* Sidebar filter input (Ctrl+E) */
+#sidebar-filter {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 10px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+#sidebar-filter:focus {
+    border-color: var(--accent);
+}
+
+/* In-app terminal panel */
+#terminal-panel {
+    height: 240px;
+    min-height: 140px;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border);
+    background: #0b0e14;
+}
+#terminal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+}
+.term-btns button {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+    margin-left: 8px;
+    padding: 2px 6px;
+}
+.term-btns button:hover {
+    color: var(--text);
+}
+#term-output {
+    flex: 1;
+    margin: 0;
+    padding: 8px 12px;
+    overflow-y: auto;
+    font-family: 'DejaVu Sans Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: #c9d1d9;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+#term-input {
+    border: none;
+    border-top: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: 'DejaVu Sans Mono', monospace;
+    font-size: 13px;
+    padding: 7px 12px;
+    outline: none;
+}
+#term-input::placeholder {
+    color: var(--text-dim);
+    opacity: 0.6;
+}
+
+/* In-app text editor */
+.modal.wide {
+    max-width: min(880px, 92vw);
+    width: 100%;
+}
+.editor-area {
+    width: 100%;
+    box-sizing: border-box;
+    height: 55vh;
+    min-height: 320px;
+    resize: vertical;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DejaVu Sans Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    tab-size: 4;
+    outline: none;
+}
+.editor-area:focus {
+    border-color: var(--accent);
 }

@@ -14,10 +14,13 @@ pub struct FileEntry {
     pub extension: String,
     pub mime_type: String,
     pub hidden: bool,
+    pub owner: String,
+    pub locked: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
 impl FileEntry {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         path: String,
@@ -30,6 +33,8 @@ impl FileEntry {
         extension: String,
         mime_type: String,
         hidden: bool,
+        owner: String,
+        locked: bool,
     ) -> Self {
         Self {
             name,
@@ -43,6 +48,8 @@ impl FileEntry {
             extension,
             mime_type,
             hidden,
+            owner,
+            locked,
         }
     }
 }
@@ -55,6 +62,7 @@ pub struct SearchResult {
     pub is_dir: bool,
     pub size: u64,
     pub modified: String,
+    pub locked: bool,
 }
 
 #[derive(Serialize, Clone)]

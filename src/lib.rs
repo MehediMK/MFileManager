@@ -3,6 +3,7 @@ mod models;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(commands::TerminalState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -36,6 +37,17 @@ pub fn run() {
             commands::open_terminal,
             commands::preview_file,
             commands::compress_zip,
+            commands::toggle_lock,
+            commands::chmod_path,
+            commands::path_exists,
+            commands::read_file_text,
+            commands::write_file_text,
+            commands::visible_columns_setting,
+            commands::get_visible_columns,
+            commands::terminal_start,
+            commands::terminal_read,
+            commands::terminal_write,
+            commands::terminal_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

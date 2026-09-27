@@ -5,6 +5,8 @@ const { invoke } = window.__TAURI__.core;
 const shared = {
     clipboard: null, // { items: [], action: 'copy' | 'cut' }
     hiddenShown: false,
+    opQueue: [], // pending file-operation jobs {batch, job}
+    opRunning: false,
 };
 
 const perTab = new Map();
@@ -157,10 +159,22 @@ function renderProps(entry) {
             <tr><td class="label">Size</td><td class="value">${formatSize(entry.size)}</td></tr>
             <tr><td class="label">Modified</td><td class="value">${entry.modified}</td></tr>
             <tr><td class="label">Created</td><td class="value">${entry.created}</td></tr>
-            <tr><td class="label">Permissions</td><td class="value">${entry.permissions}</td></tr>
+            <tr><td class="label">Permissions</td><td class="value">${entry.permissions} <button class="link-btn" id="edit-perms">Change…</button></td></tr>
+            <tr><td class="label">Lock</td><td class="value">${entry.locked ? '🔒 Locked — protected from delete/rename/move' : '🔓 Not locked'}</td></tr>
             <tr><td class="label">MIME</td><td class="value">${entry.mimeType}</td></tr>
         </table>
     `;
+}
+
+async function showProperties(path) {
+    try {
+        const info = await send('file_info', { path });
+        showModal('Properties', renderProps(info));
+        const edit = document.getElementById('edit-perms');
+        if (edit) edit.onclick = () => showPermissionsModal(path);
+    } catch (e) {
+        showToast(String(e), true);
+    }
 }
 
 function escapeHTML(s) {
@@ -231,6 +245,7 @@ function renderList(entries) {
     if (state.hiddenShown) {
         entries = entries.filter(e => !e.hidden);
     }
+    state.lockedSet = new Set(entries.filter(e => e.locked).map(e => e.path));
 
     const list = document.getElementById('file-list');
     list.innerHTML = '';
@@ -244,8 +259,10 @@ function renderList(entries) {
         upRow.dataset.path = parent;
         upRow.innerHTML = `
             <div class="file-name"><span class="icon">⬆️</span><span data-name>..</span></div>
+            <span class="file-type"></span>
             <span class="file-size"></span>
             <span class="file-modified"></span>
+            <span class="file-owner"></span>
             <span class="file-perms"></span>
         `;
         upRow.addEventListener('click', () => {
@@ -269,9 +286,11 @@ function createFileRow(entry) {
     row.dataset.isDir = entry.isDir;
     row.draggable = true;
     row.innerHTML = `
-        <div class="file-name"><span class="icon">${getIcon(entry)}</span><span data-name title="${escapeHTML(entry.name)}">${escapeHTML(entry.name)}</span></div>
+        <div class="file-name"><span class="icon">${getIcon(entry)}</span>${entry.locked ? '<span class="lock-badge" title="Locked — protected from delete/rename/move">🔒</span>' : ''}<span data-name title="${escapeHTML(entry.name)}">${escapeHTML(entry.name)}</span></div>
+        <span class="file-type">${entry.isDir ? 'Folder' : escapeHTML(entry.extension ? entry.extension.toUpperCase() : '—')}</span>
         <span class="file-size">${entry.isDir ? '' : formatSize(entry.size)}</span>
         <span class="file-modified">${formatDate(entry.modified)}</span>
+        <span class="file-owner">${escapeHTML(entry.owner || '')}</span>
         <span class="file-perms">${entry.permissions}</span>
     `;
 
@@ -296,7 +315,7 @@ function createFileRow(entry) {
         if (!row.classList.contains('selected')) {
             selectOnly(row);
         }
-        showContextMenu(e.clientX, e.clientY, { path: entry.path, isDir: entry.isDir });
+        showContextMenu(e.clientX, e.clientY, { path: entry.path, isDir: entry.isDir, locked: entry.locked });
     });
 
     return row;
@@ -376,24 +395,130 @@ async function moveDropped(e, targetDir) {
 
     if (!paths.length || !targetDir) return;
     const copy = e.ctrlKey || e.shiftKey;
-    let done = 0;
-    for (const p of paths) {
-        if (p === targetDir) continue;
-        try {
-            if (copy) await send('copy_item', { src: p, dstDir: targetDir });
-            else await send('move_item', { src: p, dstDir: targetDir });
-            done++;
-        } catch (err) {
-            showToast(String(err), true);
-        }
-    }
-    if (done) {
-        showToast(`${done} item(s) ${copy ? 'copied' : 'moved'}`);
+    const res = await transferItems(paths, targetDir, copy ? 'copy' : 'move');
+    if (res.done || res.failed.length) {
         navigate(state.currentPath);
+        await finishTransfer(res, copy ? 'item(s) copied' : 'item(s) moved');
     }
 }
 
 // ----- Asset actions -----
+
+// Shared copy/move pipeline: lock filtering + overwrite dialog + job queue.
+// action = 'copy' | 'move'; resolves { done, failed: [job] }.
+async function transferItems(paths, dstDir, action) {
+    const empty = { done: 0, failed: [] };
+    if (!paths.length || !dstDir) return empty;
+    const baseOf = p => p.split('/').pop();
+    const dst = dstDir.endsWith('/') ? dstDir.slice(0, -1) : dstDir;
+
+    const usable = [];
+    let lockedSkipped = 0;
+    for (const p of paths) {
+        if (p === dstDir || p === dst) continue;
+        if (action === 'move' && state.lockedSet && state.lockedSet.has(p)) {
+            lockedSkipped++;
+            continue;
+        }
+        usable.push(p);
+    }
+    if (lockedSkipped) showToast(`${lockedSkipped} locked item(s) skipped`, true);
+
+    const conflicts = [];
+    for (const p of usable) {
+        try {
+            if (await send('path_exists', { path: dst + '/' + baseOf(p) })) {
+                conflicts.push(baseOf(p));
+            }
+        } catch {
+            // ignore — treated as no conflict
+        }
+    }
+
+    let mode = 'auto';
+    if (conflicts.length) {
+        mode = await conflictDialog(conflicts);
+        if (mode === 'cancel') return empty;
+    }
+
+    const jobs = [];
+    for (const p of usable) {
+        if (mode === 'skip' && conflicts.includes(baseOf(p))) continue;
+        jobs.push({ src: p, dstDir, mode, action, name: baseOf(p) });
+    }
+    if (!jobs.length) return empty;
+    return runQueue(jobs);
+}
+
+// ----- File operation queue (progress in statusbar + retry) -----
+
+let batchSeq = 0;
+
+function runQueue(jobs) {
+    const batch = { id: ++batchSeq, pending: jobs.length, done: 0, failed: [] };
+    const promise = new Promise(resolve => { batch.resolve = resolve; });
+    jobs.forEach(job => state.opQueue.push({ batch, job }));
+    if (!jobs.length) {
+        batch.resolve({ done: 0, failed: [] });
+        return promise;
+    }
+    if (!state.opRunning) processQueue();
+    return promise;
+}
+
+async function processQueue() {
+    state.opRunning = true;
+    const status = document.getElementById('status-op');
+    try {
+        while (state.opQueue.length) {
+            const { batch, job } = state.opQueue[0];
+            status.textContent = `⏳ ${job.action === 'copy' ? 'Copying' : 'Moving'} ${job.name}…`;
+            state.opQueue.shift();
+            try {
+                await send(job.action === 'copy' ? 'copy_item' : 'move_item', {
+                    src: job.src,
+                    dstDir: job.dstDir,
+                    mode: job.mode,
+                });
+                batch.done++;
+            } catch (e) {
+                batch.failed.push(job);
+                showToast(String(e), true);
+            }
+            batch.pending--;
+            if (batch.pending <= 0 && batch.resolve) {
+                const res = { done: batch.done, failed: batch.failed };
+                const resolve = batch.resolve;
+                batch.resolve = null;
+                resolve(res);
+            }
+        }
+    } finally {
+        state.opRunning = false;
+        status.textContent = '';
+    }
+}
+
+// Summary + retry for failed jobs
+async function finishTransfer(res, verb) {
+    if (res.failed.length) {
+        const list = res.failed.map(j => `<li>${escapeHTML(j.name)}</li>`).join('');
+        showModal('Transfer finished', `
+            <p>${res.done} ${verb}, <b>${res.failed.length} failed</b>:</p>
+            <ul class="conflict-list">${list}</ul>
+        `);
+        const ok = document.getElementById('modal-confirm');
+        ok.textContent = 'Retry failed';
+        ok.onclick = async () => {
+            closeModal();
+            const again = await runQueue(res.failed);
+            await finishTransfer(again, verb);
+        };
+        document.getElementById('modal-cancel').textContent = 'Close';
+    } else if (res.done) {
+        showToast(`${res.done} ${verb}`);
+    }
+}
 
 async function doCopy() {
     const target = state.clipboard;
@@ -401,28 +526,14 @@ async function doCopy() {
         showToast('Nothing to paste', true);
         return;
     }
-    const dstDir = state.currentPath;
-    let failed = false;
-    for (const item of target.items) {
-        try {
-            if (target.action === 'copy') {
-                await send('copy_item', { src: item, dstDir });
-            } else {
-                await send('move_item', { src: item, dstDir });
-            }
-        } catch (e) {
-            failed = true;
-            showToast(String(e), true);
-        }
-    }
+    const action = target.action === 'copy' ? 'copy' : 'move';
+    const res = await transferItems(target.items, state.currentPath, action);
     if (target.action === 'cut') {
         state.clipboard = null;
         document.getElementById('status-canpaste').textContent = '';
     }
     navigate(state.currentPath);
-    if (!failed) {
-        showToast(target.action === 'copy' ? 'Pasted' : 'Moved');
-    }
+    await finishTransfer(res, action === 'copy' ? 'item(s) pasted' : 'item(s) moved');
 }
 
 // ----- Context menu -----
@@ -431,7 +542,7 @@ function showContextMenu(x, y, target) {
     const menu = document.getElementById('context-menu');
     state.contextTarget = target || null;
 
-    const needsItem = ['open', 'preview', 'rename', 'copy', 'cut', 'delete', 'delete-permanent', 'compress', 'properties'];
+    const needsItem = ['open', 'preview', 'rename', 'edit', 'copy', 'cut', 'delete', 'delete-permanent', 'compress', 'properties', 'lock', 'permissions'];
     menu.querySelectorAll('.menu-item').forEach(item => {
         const a = item.dataset.action;
         let display = 'block';
@@ -439,6 +550,9 @@ function showContextMenu(x, y, target) {
             display = 'none';
         } else if (a === 'paste') {
             display = state.clipboard ? 'block' : 'none';
+        }
+        if (a === 'lock' && display !== 'none') {
+            item.textContent = state.contextTarget && state.contextTarget.locked ? '🔓 Unlock' : '🔒 Lock';
         }
         item.style.display = display;
     });
@@ -489,6 +603,13 @@ async function handleAction(action) {
         case 'rename':
             showRenameModal(target.path);
             break;
+        case 'edit':
+            if (target.isDir) {
+                showToast('Cannot edit a directory', true);
+            } else if (target.path) {
+                showEditorModal(target.path);
+            }
+            break;
         case 'copy':
             if (target.path) {
                 state.clipboard = { items: [target.path], action: 'copy' };
@@ -507,7 +628,9 @@ async function handleAction(action) {
             await doCopy();
             break;
         case 'delete':
-            if (target.path) {
+            if (target.locked) {
+                showToast('Item is locked — unlock it first', true);
+            } else if (target.path) {
                 if (await safeConfirm(`Move "${target.path.split('/').pop()}" to trash?`)) {
                     try {
                         await send('delete_path', { path: target.path, permanent: false });
@@ -519,7 +642,9 @@ async function handleAction(action) {
             }
             break;
         case 'delete-permanent':
-            if (target.path) {
+            if (target.locked) {
+                showToast('Item is locked — unlock it first', true);
+            } else if (target.path) {
                 if (await safeConfirm(`Permanently delete "${target.path.split('/').pop()}"? This cannot be undone!`)) {
                     try {
                         await send('delete_path', { path: target.path, permanent: true });
@@ -548,21 +673,31 @@ async function handleAction(action) {
         case 'terminal':
             openTerminal();
             break;
+        case 'terminal-app':
+            toggleTerminal(true);
+            break;
         case 'set-background':
             setBackground();
             break;
         case 'reset-background':
             resetBackground();
             break;
-        case 'properties':
+        case 'lock':
             if (target.path) {
                 try {
-                    const info = await send('file_info', { path: target.path });
-                    showModal('Properties', renderProps(info));
+                    const nowLocked = await send('toggle_lock', { path: target.path });
+                    showToast(nowLocked ? '🔒 Locked' : '🔓 Unlocked');
+                    navigate(state.currentPath);
                 } catch (e) {
                     showToast(String(e), true);
                 }
             }
+            break;
+        case 'permissions':
+            if (target.path) showPermissionsModal(target.path);
+            break;
+        case 'properties':
+            if (target.path) showProperties(target.path);
             break;
     }
 }
@@ -571,14 +706,21 @@ async function handleAction(action) {
 
 function showModal(title, content) {
     const overlay = document.getElementById('modal-overlay');
+    overlay.querySelector('.modal').classList.remove('wide');
     document.getElementById('modal-content').innerHTML = `
         <h3>${title}</h3>
         ${content}
     `;
     overlay.classList.remove('hidden');
 
-    document.getElementById('modal-confirm').onclick = () => overlay.classList.add('hidden');
-    document.getElementById('modal-cancel').onclick = () => overlay.classList.add('hidden');
+    const ok = document.getElementById('modal-confirm');
+    const cancel = document.getElementById('modal-cancel');
+    ok.textContent = 'Confirm';
+    cancel.textContent = 'Cancel';
+    ok.style.display = '';
+    cancel.style.display = '';
+    ok.onclick = () => overlay.classList.add('hidden');
+    cancel.onclick = () => overlay.classList.add('hidden');
 }
 
 function closeModal() {
@@ -598,7 +740,45 @@ function safeConfirm(message) {
     });
 }
 
+// Safe overwrite dialog: Replace / Keep both / Skip
+// Returns 'replace' | 'keep' | 'skip' | 'cancel'
+function conflictDialog(names) {
+    return new Promise(resolve => {
+        const overlay = document.getElementById('modal-overlay');
+        const shown = names.slice(0, 8).map(n => `<li>${escapeHTML(n)}</li>`).join('');
+        const extra = names.length > 8 ? `<li>…and ${names.length - 8} more</li>` : '';
+        document.getElementById('modal-content').innerHTML = `
+            <h3>Name conflict</h3>
+            <p class="conflict-sub">${names.length} item(s) already exist at the destination:</p>
+            <ul class="conflict-list">${shown}${extra}</ul>
+            <div class="conflict-actions">
+                <button class="conflict-replace" data-choice="replace">Replace</button>
+                <button data-choice="keep">Keep both</button>
+                <button data-choice="skip">Skip these</button>
+            </div>`;
+        const ok = document.getElementById('modal-confirm');
+        const cancel = document.getElementById('modal-cancel');
+        ok.style.display = 'none';
+        cancel.style.display = 'none';
+        const finish = (choice) => {
+            overlay.classList.add('hidden');
+            ok.style.display = '';
+            cancel.style.display = '';
+            resolve(choice);
+        };
+        document.querySelectorAll('#modal-content .conflict-actions button').forEach(btn => {
+            btn.onclick = () => finish(btn.dataset.choice);
+        });
+        cancel.onclick = () => finish('cancel');
+        overlay.classList.remove('hidden');
+    });
+}
+
 function showRenameModal(path) {
+    if (state.lockedSet && state.lockedSet.has(path)) {
+        showToast('Item is locked — unlock it first', true);
+        return;
+    }
     const name = path.split('/').pop();
     showModal('Rename', `
         <div class="field">
@@ -645,6 +825,114 @@ function showCreateModal(type) {
     };
 }
 
+// ----- Permissions (chmod) -----
+
+async function showPermissionsModal(path) {
+    let info;
+    try {
+        info = await send('file_info', { path });
+    } catch (e) {
+        showToast(String(e), true);
+        return;
+    }
+    const mode = (parseInt(info.permissions, 8) || 0) & 0o777;
+    const groups = [
+        ['Owner', [256, 128, 64]],
+        ['Group', [32, 16, 8]],
+        ['Other', [4, 2, 1]],
+    ];
+    const rows = groups.map(([label, bits]) => `
+        <tr>
+            <td class="label">${label}</td>
+            ${bits.map(b => `<td class="value"><input type="checkbox" class="perm-cb" data-bit="${b}" ${mode & b ? 'checked' : ''}></td>`).join('')}
+        </tr>`).join('');
+
+    showModal('Permissions', `
+        <div class="perm-name">${escapeHTML(info.name)}</div>
+        <table class="properties-grid perm-grid">
+            <tr><td class="label"></td><td class="value"><b>r</b></td><td class="value"><b>w</b></td><td class="value"><b>x</b></td></tr>
+            ${rows}
+        </table>
+        <div class="field">
+            <label>Octal mode (e.g. 644)</label>
+            <input type="text" id="chmod-octal" maxlength="4" value="${(mode & 0o777).toString(8).padStart(3, '0')}">
+        </div>
+        <p style="font-size: 12px; color: var(--text-dim);">r=4, w=2, x=1 — value per owner / group / other.</p>
+    `);
+
+    const oct = document.getElementById('chmod-octal');
+    const cbs = [...document.querySelectorAll('.perm-cb')];
+    const syncOctal = () => {
+        let m = 0;
+        cbs.forEach(c => { if (c.checked) m += parseInt(c.dataset.bit, 10); });
+        oct.value = m.toString(8).padStart(3, '0');
+    };
+    const syncCbs = () => {
+        let m = parseInt(oct.value, 8);
+        if (isNaN(m)) return;
+        m &= 0o777;
+        cbs.forEach(c => { c.checked = !!(m & parseInt(c.dataset.bit, 10)); });
+    };
+    cbs.forEach(c => c.addEventListener('change', syncOctal));
+    oct.addEventListener('change', syncCbs);
+
+    const ok = document.getElementById('modal-confirm');
+    ok.textContent = 'Apply';
+    ok.onclick = async () => {
+        const m = parseInt(oct.value, 8);
+        if (isNaN(m) || m < 0 || m > 0o777) {
+            showToast('Invalid octal mode', true);
+            return;
+        }
+        try {
+            await send('chmod_path', { path, mode: m });
+            closeModal();
+            navigate(state.currentPath);
+            showToast('Permissions updated');
+        } catch (e) {
+            showToast(String(e), true);
+        }
+    };
+    document.getElementById('modal-cancel').textContent = 'Cancel';
+}
+
+// ----- In-app text editor -----
+
+async function showEditorModal(path) {
+    let text;
+    try {
+        text = await send('read_file_text', { path });
+    } catch (e) {
+        showToast(String(e), true);
+        return;
+    }
+    const name = path.split('/').pop();
+    showModal(`Edit — ${escapeHTML(name)}`, `<textarea id="editor-area" class="editor-area" spellcheck="false"></textarea>`);
+    document.querySelector('.modal').classList.add('wide');
+    const ta = document.getElementById('editor-area');
+    ta.value = text;
+
+    const ok = document.getElementById('modal-confirm');
+    ok.textContent = '💾 Save';
+    ok.onclick = async () => {
+        try {
+            await send('write_file_text', { path, content: ta.value });
+            closeModal();
+            navigate(state.currentPath);
+            showToast('Saved');
+        } catch (e) {
+            showToast(String(e), true);
+        }
+    };
+    const cancel = document.getElementById('modal-cancel');
+    cancel.textContent = 'Close';
+    cancel.onclick = async () => {
+        if (ta.value !== text && !(await safeConfirm('Discard changes?'))) return;
+        closeModal();
+    };
+    ta.focus();
+}
+
 // ----- Search -----
 
 async function startSearch(initialQuery) {
@@ -677,8 +965,10 @@ async function startSearch(initialQuery) {
             row.dataset.path = r.path;
             row.innerHTML = `
                 <div class="file-name"><span class="icon">${r.isDir ? '📁' : '📄'}</span><span data-name title="${escapeHTML(r.path)}">${escapeHTML(r.name)}</span></div>
+                <span class="file-type">${r.isDir ? 'Folder' : escapeHTML((r.name.split('.').pop() || '').toUpperCase())}</span>
                 <span class="file-size">${r.isDir ? '' : formatSize(r.size)}</span>
                 <span class="file-modified"></span>
+                <span class="file-owner"></span>
                 <span class="file-perms"></span>
             `;
             row.addEventListener('dblclick', () => {
@@ -691,7 +981,7 @@ async function startSearch(initialQuery) {
             row.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 selectOnly(row);
-                showContextMenu(e.clientX, e.clientY, { path: r.path, isDir: r.isDir });
+                showContextMenu(e.clientX, e.clientY, { path: r.path, isDir: r.isDir, locked: r.locked });
             });
             list.appendChild(row);
         }
@@ -851,6 +1141,37 @@ document.getElementById('btn-sidebar').addEventListener('click', () => {
     document.body.classList.toggle('sidebar-collapsed');
 });
 
+// ----- Sidebar filter (Ctrl+E) -----
+
+const sidebarFilter = document.getElementById('sidebar-filter');
+
+function toggleSidebarFilter() {
+    const hidden = sidebarFilter.classList.toggle('hidden');
+    if (!hidden) {
+        sidebarFilter.focus();
+        sidebarFilter.select();
+    } else {
+        sidebarFilter.value = '';
+        sidebarFilter.dispatchEvent(new Event('input'));
+    }
+}
+
+sidebarFilter.addEventListener('input', () => {
+    const q = sidebarFilter.value.trim().toLowerCase();
+    document.querySelectorAll('#sidebar .sidebar-item').forEach(item => {
+        item.style.display = !q || item.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+    document.querySelectorAll('#sidebar .sidebar-section').forEach(sec => {
+        if (!q) {
+            sec.classList.remove('hidden');
+            return;
+        }
+        const anyVisible = [...sec.querySelectorAll('.sidebar-item')]
+            .some(i => i.style.display !== 'none');
+        sec.classList.toggle('hidden', !anyVisible);
+    });
+});
+
 // ----- Toolbar wiring -----
 
 document.getElementById('btn-back').addEventListener('click', () => {
@@ -937,10 +1258,15 @@ document.getElementById('btn-paste').addEventListener('click', () => doCopy());
 
 document.getElementById('btn-delete').addEventListener('click', async () => {
     if (!state.selectedItems.size) return;
-    const confirmMsg = `Move ${state.selectedItems.size} item(s) to trash?`;
+    const all = [...state.selectedItems];
+    const targets = all.filter(p => !(state.lockedSet && state.lockedSet.has(p)));
+    const lockedCount = all.length - targets.length;
+    if (lockedCount) showToast(`${lockedCount} locked item(s) skipped`, true);
+    if (!targets.length) return;
+    const confirmMsg = `Move ${targets.length} item(s) to trash?`;
     if (await safeConfirm(confirmMsg)) {
         try {
-            for (const item of state.selectedItems) {
+            for (const item of targets) {
                 await send('delete_path', { path: item, permanent: false });
             }
             navigate(state.currentPath);
@@ -955,8 +1281,7 @@ document.getElementById('btn-dupes').addEventListener('click', showDuplicates);
 
 document.getElementById('btn-properties').addEventListener('click', () => {
     if (state.selectedItems.size === 1) {
-        const path = [...state.selectedItems][0];
-        send('file_info', { path }).then(info => showModal('Properties', renderProps(info))).catch(e => showToast(e, true));
+        showProperties([...state.selectedItems][0]);
     } else {
         showToast('Select one item to view properties', true);
     }
@@ -977,6 +1302,160 @@ async function openTerminal() {
 }
 
 document.getElementById('btn-terminal').addEventListener('click', openTerminal);
+
+// ----- In-app terminal panel -----
+
+let termPollTimer = null;
+let termWriteWarned = false;
+
+// Output comes from `terminal_read` (polled) — no event API dependency.
+function startTermPoll() {
+    if (termPollTimer) return;
+    termPollTimer = setInterval(async () => {
+        try {
+            const s = await send('terminal_read');
+            if (s) appendTerm(s);
+        } catch (err) {
+            console.error('terminal_read failed:', err);
+            stopTermPoll();
+        }
+    }, 100);
+}
+
+function stopTermPoll() {
+    if (termPollTimer) {
+        clearInterval(termPollTimer);
+        termPollTimer = null;
+    }
+}
+
+function appendTerm(data) {
+    const out = document.getElementById('term-output');
+    // strip ANSI/OSC escape sequences (simple renderer)
+    const clean = data
+        .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+        .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1b[@-Z\\-_]/g, '');
+    out.textContent += clean;
+    if (out.textContent.length > 200000) {
+        out.textContent = out.textContent.slice(-200000);
+    }
+    out.scrollTop = out.scrollHeight;
+}
+
+function termSend(bytes) {
+    send('terminal_write', { data: bytes }).catch(async (err) => {
+        console.error('terminal_write failed:', err);
+        if (String(err).includes('not running')) {
+            // Session died (shell exited) — restart and retry once
+            try {
+                await send('terminal_start', { cwd: state.currentPath || '/' });
+                await send('terminal_write', { data: bytes });
+                return;
+            } catch (e2) {
+                err = e2;
+            }
+        }
+        if (!termWriteWarned) {
+            termWriteWarned = true;
+            showToast('Terminal input failed: ' + err, true);
+        }
+    });
+}
+
+async function toggleTerminal(force) {
+    const panel = document.getElementById('terminal-panel');
+    const show = force === true ? true : force === false ? false : panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !show);
+    if (!show) {
+        stopTermPoll();
+        return;
+    }
+
+    try {
+        await send('terminal_start', { cwd: state.currentPath || '/' });
+        termWriteWarned = false;
+    } catch (e) {
+        console.error('terminal start failed:', e);
+        showToast('Terminal failed to start: ' + e, true);
+        panel.classList.add('hidden');
+        return;
+    }
+    startTermPoll();
+    const input = document.getElementById('term-input');
+    input.value = '';
+    setTimeout(() => input.focus(), 50);
+}
+
+document.getElementById('term-close').addEventListener('click', () => toggleTerminal(false));
+document.getElementById('term-clear').addEventListener('click', () => {
+    document.getElementById('term-output').textContent = '';
+});
+document.getElementById('terminal-panel').addEventListener('click', (e) => {
+    if (!e.target.closest('.term-btns')) document.getElementById('term-input').focus();
+});
+// Focus also on press (click may be swallowed by text selection in output)
+document.getElementById('terminal-panel').addEventListener('mousedown', (e) => {
+    if (!e.target.closest('.term-btns')) {
+        setTimeout(() => document.getElementById('term-input').focus(), 0);
+    }
+});
+
+// Key mapping for the simple line editor → PTY bytes
+const TERM_KEYS = {
+    Enter: '\r',
+    Backspace: '\x7f',
+    Tab: '\t',
+    Escape: '\x1b',
+    ArrowUp: '\x1b[A',
+    ArrowDown: '\x1b[B',
+    ArrowRight: '\x1b[C',
+    ArrowLeft: '\x1b[D',
+    Delete: '\x1b[3~',
+    Home: '\x1b[H',
+    End: '\x1b[F',
+    PageUp: '\x1b[5~',
+    PageDown: '\x1b[6~',
+};
+
+document.getElementById('term-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Process') return;
+    if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+        const c = e.key.toUpperCase().charCodeAt(0);
+        if (c >= 64 && c <= 95) {
+            e.preventDefault();
+            termSend(String.fromCharCode(c - 64));
+        }
+        return;
+    }
+    if (TERM_KEYS[e.key]) {
+        e.preventDefault();
+        termSend(TERM_KEYS[e.key]);
+        e.target.value = '';
+        return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        termSend(e.key);
+        e.target.value = '';
+    }
+});
+
+document.getElementById('term-input').addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    if (text) termSend(text.replace(/\r?\n/g, '\r'));
+});
+
+// IME/composition fallback: composed text arrives via input event
+// (normal typing is preventDefault'ed in keydown, so no double-send)
+document.getElementById('term-input').addEventListener('input', (e) => {
+    const v = e.target.value;
+    if (v) {
+        termSend(v);
+        e.target.value = '';
+    }
+});
 
 // ----- Background image -----
 
@@ -1208,6 +1687,30 @@ document.addEventListener('keydown', (e) => {
         case 'F2':
             document.getElementById('btn-rename').click();
             break;
+        case 'F4': {
+            const items = [...state.selectedItems];
+            if (items.length === 1 && !(state.lockedSet && state.lockedSet.has(items[0]))) {
+                showEditorModal(items[0]);
+            } else if (items.length === 1) {
+                showToast('Item is locked — unlock it first', true);
+            } else {
+                showToast('Select one file to edit', true);
+            }
+            break;
+        }
+        case '`':
+            if (e.ctrlKey) {
+                e.preventDefault();
+                toggleTerminal();
+            }
+            break;
+        case 'e':
+        case 'E':
+            if (e.ctrlKey) {
+                e.preventDefault();
+                toggleSidebarFilter();
+            }
+            break;
         case 'r':
         case 'R':
             if (e.ctrlKey) {
@@ -1274,6 +1777,32 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+// ----- Custom columns (click header to toggle, persisted) -----
+
+let visibleCols = ['type', 'size', 'modified', 'owner', 'perms'];
+
+function applyColumns() {
+    const fv = document.getElementById('files-view');
+    ['type', 'size', 'modified', 'owner', 'perms'].forEach(c => {
+        fv.classList.toggle('hide-' + c, !visibleCols.includes(c));
+    });
+}
+
+document.querySelectorAll('#file-list-header [data-col]').forEach(head => {
+    head.addEventListener('click', async () => {
+        const col = head.dataset.col;
+        visibleCols = visibleCols.includes(col)
+            ? visibleCols.filter(c => c !== col)
+            : [...visibleCols, col];
+        applyColumns();
+        try {
+            await send('visible_columns_setting', { cols: visibleCols });
+        } catch (e) {
+            showToast(String(e), true);
+        }
+    });
+});
+
 // ----- Init -----
 
 (async function init() {
@@ -1282,6 +1811,14 @@ document.addEventListener('keydown', (e) => {
         const hiddenSetting = await send('get_hidden_setting');
         document.getElementById('hide-hidden-check').checked = hiddenSetting;
         state.hiddenShown = hiddenSetting;
+
+        // Load visible columns
+        try {
+            visibleCols = await send('get_visible_columns');
+        } catch {
+            // keep defaults
+        }
+        applyColumns();
 
         // Load background image
         const bgPath = await send('get_background_setting');
